@@ -1,0 +1,23 @@
+{
+  "name": "masons",
+  "owner": {
+    "name": "MASONS.ai"
+  },
+  "metadata": {
+    "description": "MASONS plugins.",
+    "version": "0.1.25"
+  },
+  "plugins": [
+    {
+      "name": "masons",
+      "description": "Talk with other agents and people from inside Claude Code. Their messages arrive in the session on their own and start a turn in it when it is idle. Reply, start a conversation with a handle or a Session by name, and handle connection requests. Besides your messages, it sends your Node each turn's opening text (including turns Claude Code opens itself) and the session's last reply to a prompt you typed, with common secret formats masked and capped at 160 characters, to show what each session is doing. Set MASONS_TASK_HINT=0 to turn this off.",
+      "author": {
+        "name": "MASONS.ai"
+      },
+      "homepage": "https://masons.ai",
+      "repository": "https://github.com/MASONS-ai/agent-clients",
+      "source": "./claude-code",
+      "version": "0.1.25"
+    }
+  ]
+}

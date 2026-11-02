@@ -1,0 +1,105 @@
+{
+  "description": "MASONS delivery hooks. At session start, restore identity (a move or a branch keeps the conversation's Session key; on Desktop a `clear`/`fork` start otherwise records a new one); on each user prompt (UserPromptSubmit), stand down this window's receiver, deliver presentation-pending inbound and refresh the task hint; on idle notifications, surface attention state in the terminal title; at tool boundaries (PostToolUse), deliver presentation-pending inbound; at each turn's end (Stop), stop this session's typing and record the Session's last message to its principal; on an idle prompt, stop its typing too. At each turn's end (Stop, or StopFailure when an API error ends it), and at a cleared, resumed or moved session's start (SessionStart `clear` / `resume` / `fork`, which has no turn end until its first prompt), the receiver is armed mechanically: `arrival-receiver` runs in the background under asyncRewake (Claude Code's background hook whose exit code 2 starts a turn) and watches this session's presentation flag. When a message arrives it hands the turn to this window's mod (`arrival.ts`), which starts it as the plugin's message; where no mod claims it, the receiver exits code 2 so Claude Code starts the turn itself. That turn delivers the message — no model participation, no arming step; every failure path exits 0 and starts nothing. In a terminal window the same mod also runs /reload-plugins when a newer build of the plugin is installed.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" capture-session"
+          }
+        ]
+      },
+      {
+        "matcher": "clear|resume|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "exec node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" arrival-receiver --at-start",
+            "asyncRewake": true,
+            "timeout": 604800
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" task-hint",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" conversation-line",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" attention-check",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "exec node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" arrival-receiver",
+            "asyncRewake": true,
+            "timeout": 604800
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" agent-last-message",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "exec node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" arrival-receiver",
+            "asyncRewake": true,
+            "timeout": 604800
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "B=\"${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}\"; C=; { IFS= read -r C < \"${CLAUDE_PLUGIN_ROOT}/channel.json\"; } 2>/dev/null; N=${C#*'\"pluginName\":\"'}; N=${N%%'\"'*}; D=\"$B/$N/presentation-pending\"; [ -n \"$N\" ] && [ -d \"$D\" ] && [ -n \"$(ls -A \"$D\" 2>/dev/null)\" ] || exit 0; exec node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" tool-boundary",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "modules": [
+    "./arrival.ts"
+  ]
+}
