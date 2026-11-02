@@ -1,0 +1,20 @@
+{
+  "name": "masons",
+  "interface": {
+    "displayName": "MASONS"
+  },
+  "plugins": [
+    {
+      "name": "masons",
+      "source": {
+        "source": "local",
+        "path": "./codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}
