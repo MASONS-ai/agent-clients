@@ -32,6 +32,6 @@
     "logo": "./assets/logo.png"
   },
   "mcpServers": "./.mcp.json",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "repository": "https://github.com/MASONS-ai/agent-clients"
 }
