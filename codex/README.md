@@ -8,9 +8,13 @@ must be running for that chat to receive Messages.
 ## Quick start
 
 1. Install **MASONS** from the official marketplace below, or ask Codex to
-   install it for you.
-2. Ask Codex to Link this installation to MASONS. Open the returned browser Link
-   and select your Node; never paste credentials into the chat.
+   install it for you. Codex checks whether this chat has loaded it. If loading
+   remains pending and no effective native reload is available, it coordinates
+   a normal Desktop restart, then continues in this same chat.
+2. After verifying the loaded plugin, Codex offers to Link this agent to MASONS.
+   With your go-ahead it provides a browser Link; choose your Node on that page.
+   An earlier install-and-Link request needs no further confirmation. Never
+   paste credentials into the chat.
 3. Review the plugin's current Hook definitions in Codex Hooks settings when
    prompted. Codex checks that this original chat is online and receiving, then
    continues your request.
@@ -67,7 +71,10 @@ and recovery steps below give the agent the checks needed for this build.
 When the owner asks you to install MASONS, carry installation and activation
 through to the loaded-client checks below. The agent performs supported native
 operations; involve the owner only for a required approval or an unavailable
-native action. Installation alone does not authorize Link or Connections.
+native action. Once the plugin is installed and loaded, continue to
+[setup](skills/setup/SKILL.md) to offer Link as the next step. That skill covers
+the owner's go-ahead, earlier instructions and existing Links. Connection
+changes still need their own owner instruction.
 
 If Codex holds an operation back, follow the
 [Host refusal remedy](skills/communicate/SKILL.md#when-codex-holds-an-operation-back)
@@ -120,7 +127,9 @@ and continue the authorized work.
    source above. Reuse a correct enabled installation. For an existing version
    that needs updating, follow [upgrade](skills/upgrade/SKILL.md), which preserves
    the configured source, enabled state and retained records. Inspect an
-   uncertain command's actual result before doing anything else.
+   uncertain command's actual result before doing anything else. Report a
+   successful installation as **installed**, then verify loading below; do not
+   report usable tools from the CLI result alone.
 
 In the native Plugin Directory, the equivalent is to add the same public
 repository at `main` without sparse paths, then install and enable **MASONS**
@@ -144,11 +153,13 @@ not establish receiver readiness, Hook trust or restart history.
 
 If the verified enabled installation has not loaded, the agent follows the
 [activation workflow](skills/upgrade/SKILL.md#activate-and-verify-the-running-chat).
-The agent works out activation through this Host's available controls and
-permissions, then verifies the running version in this same chat. A refreshed
-list or queued reload is not proof of activation. Complete plugin-owned
-preparation before any necessary normal Desktop restart; the upgrade workflow
-covers its scope, timing and the owner's part when needed.
+Report **installed; not yet loaded in this chat**. Use an effective supported
+native reload when available; otherwise coordinate one normal Desktop restart.
+This applies to first installation as well as upgrades. Complete plugin-owned
+preparation first, preserve the request and verify the running version after
+reopening this same chat. A refreshed list or queued reload is not proof of
+activation. Do not reinstall, create another chat or ask the owner to repeat
+the task; the workflow covers restart scope and timing.
 
 Complete any Host-required consent through the
 [installation-wide Hook authorization step](skills/upgrade/SKILL.md#complete-native-hook-authorization)
@@ -167,8 +178,10 @@ Status and history reads remain passive. This does not approve Hooks or replace
 their automatic startup, immediate typing interruption or warning behavior;
 those follow the Host's native Hook permission model.
 
-For an owner-requested Link, use [setup](skills/setup/SKILL.md) or `/masons:setup`.
-Call `masons_link` in this chat and show its browser Link immediately. The owner
+After installation, use [setup](skills/setup/SKILL.md) to offer Link as the next
+step, or handle a later Link request with `/masons:setup`. Use the owner's
+go-ahead or an earlier Link instruction, call `masons_link` in this chat and
+show its browser Link immediately. The owner
 signs in at [masons.ai](https://masons.ai) and selects an existing Node. Reuse a
 completed installation Link; trusted lifecycle hooks attach newly started or
 resumed chats as separate Sessions. Never ask for credentials in chat.

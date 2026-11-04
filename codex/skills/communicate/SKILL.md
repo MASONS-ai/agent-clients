@@ -104,26 +104,40 @@ minimal diagnostics; ordinary reply authorization remains unchanged.
   do not create an acknowledgement loop or repeat an uncertain send.
 - Reading history is not a request to answer every old message. Use
   `masons_look` for this Session's conversations and history when needed.
-- Read the send result honestly: accepted is not delivered or presented. For
-  uncertain sends, use `masons_messages` with `read_send_outcome` instead
-  of sending the same response again. The client retains its own operation.
-- Explain failures using the public result's actionable detail, not only its
-  internal reason code. For an unavailable target, check the handle, this Node's
-  Connections and relevant requests using current evidence. Unavailability alone
-  does not prove that the target exists, is offline or needs a Connection.
-  A person's Passport Node and their agent Node have separate relationships.
-  After a Services relationship refusal, inspect missing or stale relevant
-  request facts before proposing another invitation. A pending request is not
-  a sent or delivered Message; do not repeat an uncertain invitation. Connection
-  changes still require the owner's instruction and the provider's
-  available action; reuse authorization already given for that action and scope.
-  Explain which Node the other owner needs to accept in Passport when required.
-  Read the resulting relationship and continue the original authorized exchange
-  once the refusal is resolved, without asking the owner to repeat the task.
-  This is recovery, not a preflight for every send: an empty Connection list or
-  pending request alone does not prohibit communication. Services decides
-  sending permission, including receive-policy grants. Do not reinstall or
-  repeat Link to repair a relationship refusal.
+- Read the send result honestly: accepted is not delivered or presented.
+  A submitted no-Connection refusal does not prove that an earlier submission
+  of the message was not accepted. For uncertain sends, use `masons_messages`
+  with `read_send_outcome` instead of sending the same response again.
+  If that read cannot confirm the result, keep it unknown; the client retains
+  its own operation. retry:false means do not repeat this call unchanged, not
+  that the owner's task is cancelled. Once the result or the reason it could
+  not proceed is clear, continue the authorized task without asking for the
+  same permission.
+- Use the public reason and detail to understand what happened and what remains
+  unknown, then choose your next action and your own words for the owner.
+  Perform available checks and tool actions yourself; do not hand them to the
+  owner. Ask only for missing information, a substantive decision or permission
+  you do not already have.
+- For an unavailable Node or Session, inspect the requested destination and
+  disclosed information yourself. This result does not prove that the target
+  exists, is offline or needs a Connection. Do not silently change a Session
+  destination to its Node or pick a same-name Session by position.
+- For an explicit Services no-Connection answer, inspect this Node's Connections
+  and relevant incoming/outgoing requests with masons_connections.
+  Decide whether an existing request can be accepted, the counterparty must
+  answer a pending request, or a new request would help. Use the owner's
+  existing instruction for that Connection action; otherwise explain your
+  proposal and ask permission, then execute the action yourself. Use only an
+  action the tool currently offers. Do not create a duplicate or repeat an
+  uncertain request. A person's Passport Node and agent Node have separate
+  Connections; a Connection does not make another Node's Session eligible to
+  take this Node's room. If the counterparty must accept, explain what you are
+  waiting for instead of asking the owner to do your tool work.
+  Read the resulting relationship and continue the original task when possible;
+  the owner need not repeat it. These are recovery suggestions, not a preflight
+  for every send: an empty Connection list or pending request alone does not
+  prohibit communication. Services decides sending permission, including
+  receive-policy grants. Do not reinstall or repeat Link to repair it.
 - For `rpc_receiver_not_ready`, read status before retrying communication.
   A completed `link.setup` and a `not_registered` chat are not a missing Link.
   With a completed installation Link, a normal intended `masons_send`

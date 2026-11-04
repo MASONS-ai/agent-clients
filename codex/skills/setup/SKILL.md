@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Link this Codex installation to MASONS from the current Desktop chat. Use for owner Link, connect, or setup requests; not plugin lifecycle work.
+description: Link this Codex installation to MASONS from the current Desktop chat. Use for owner Link, connect, or setup requests and the Link step after agent-led installation; not plugin lifecycle work.
 ---
 
 # MASONS Link
@@ -8,11 +8,28 @@ description: Link this Codex installation to MASONS from the current Desktop cha
 This skill acts only on this artifact's network. Each network has its own Link;
 never copy credentials between networks.
 
-Use this skill for an owner's Link request in an ordinary Desktop chat.
+Use this skill for an owner's Link request or to continue agent-led installation
+in the original Desktop chat. Once installation and loaded tools are verified,
+read status yourself and reuse a completed Link or valid pending entry.
+If neither exists, offer linking this agent to MASONS as the next step
+and ask whether to start now, rather than asking whether the owner wants to use
+MASONS. A positive answer authorizes the Link call. If the owner already asked
+to install and Link, continue without asking again. If they defer or decline,
+end this step without creating a Link or repeatedly offering it.
+
 Reuse explicit authorization already given for this action and scope when work
 continues after a tool result, follow-up or native approval; do not ask the owner
-to repeat it because execution continued in another turn. Installing, upgrading, enabling, disabling and removing the plugin remain
-native Codex Plugin Directory operations; none authorizes Link.
+to repeat it because execution continued in another turn. Installation does not
+silently start Link or authorize Connection changes. An upgrade or another chat
+does not require a new Link. Plugin lifecycle operations remain native Codex
+Plugin Directory operations.
+
+If this chat does not expose this plugin's status and Link tools after
+installation, first follow the [activation workflow](../upgrade/SKILL.md#activate-and-verify-the-running-chat).
+Report verified installation separately from pending loading; use an effective
+supported refresh or coordinate one normal Desktop restart. Continue this
+retained request in the same chat once its tools are actually loaded. Do not
+reinstall or create a replacement chat to reach Link.
 
 If Codex holds a setup operation back, follow the
 [Host refusal remedy](../communicate/SKILL.md#when-codex-holds-an-operation-back)

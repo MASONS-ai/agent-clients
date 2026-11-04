@@ -158,7 +158,12 @@ does not authorize a new installation, update or Link.
 
 ## Activate and verify the running chat
 
-Record the prior and installed versions (or that the version is unchanged).
+This activation workflow also applies after first installation. Record the
+prior and installed versions (or that the version is unchanged). Installation
+and loading are separate results: CLI success alone is not usable tools. If
+this chat lacks this plugin's tools, report **installed; not yet loaded in this
+chat**, using the verified inventory and manifest below. Keep the original
+onboarding request and intended counterpart so work can continue after loading.
 Re-read the selected native inventory with the same resolved CLI and
 `plugin list --marketplace "<marketplaceName>" --json`. Use the exact
 `pluginId` and `marketplaceName`, `installed=true`, `version` and `enabled`;
@@ -172,13 +177,15 @@ matches its plugin name and version. Use the normal user `.codex` home when
 `CODEX_HOME` is unset. Missing or invalid bytes leave installation unverified;
 never select another cached version or edit the cache to satisfy this check.
 Use the matching MASONS status tool already exposed in this chat, if available,
-to check frontend, communication-service and Services-reported Client versions
-and compare the Services-confirmed Node with the recorded pre-upgrade identity
-without re-Linking anything. A different or unavailable Node leaves identity
-continuity unverified. When these versions differ, tell the owner that the
-upgrade has not fully taken effect in this chat and that the agent will complete
-activation and verification. Compare each loaded version with the independently
-verified installed target even when all loaded versions agree with each other.
+to check frontend and communication-service versions against the verified
+installed target, even when the loaded versions agree with each other. For an
+already linked installation, also check the Services Client and compare the
+Services-confirmed Node with the recorded pre-upgrade identity without re-Linking.
+A different or unavailable Node leaves that continuity unverified. A first
+installation without a completed Link has no prior Node or Services Client to
+compare; their absence does not prevent loading verification or the next setup
+step. Explain mismatches as installation not yet fully loaded in this chat,
+then complete activation and verification.
 An older status implementation may have no `installation` or `activation` fields
 and can report healthy old-version communication after installation; that is not
 completion. A mismatch needs runtime provenance
@@ -198,15 +205,23 @@ preferring a plugin/MCP reload when effective. Verify this same chat after it
 takes effect; a queued refresh, refreshed skill list or successful marketplace
 upgrade is not proof of activation.
 
-If the loading cause remains unknown or an activation control is unavailable,
-report those facts separately. A refused UI route or missing control socket
-alone does not establish a required restart. A normal Desktop restart may be
-proposed as an untested remedy with its basis and effect on other active chats
-explained. Complete plugin-owned preparation first and agree disruptive timing
-unless already authorized. The agent uses the Host's permitted controls, or
-involves the owner for an action it cannot perform. Resume verification in this
-same chat afterward. A separate App Server is not evidence that this chat
-reloaded; a new chat is not required.
+When verified installation remains unloaded and no effective supported reload
+is available, coordinate one normal Desktop restart. This is an accepted loading
+step for both first installation and upgrades, not proof of the underlying
+cause or a guarantee that restarting cures every failure. Explain that
+installation is complete but use in this chat is pending; mention the effect
+on other active chats and agree timing unless already authorized. Finish
+plugin-owned preparation first. Use the Host's permitted controls or involve
+the owner only for the native action the agent cannot perform. Do not bypass
+a refused UI route or attach private IPC.
+
+After reopening, verify this same chat's actual tools and loaded versions,
+then continue the retained request. Do not reinstall or create another chat.
+A separate App Server or refreshed skills list does not establish loading here.
+For first installation, a genuinely unlinked client is an expected state:
+continue [setup](../setup/SKILL.md) with the existing owner instructions, then
+verify receiving and a real exchange when requested. Reuse any completed Link
+or valid pending entry; restarting does not authorize a replacement Link.
 
 Unavailable Services Client alone does not prove that code failed to load. A
 completed `link.setup` with a `not_registered` chat needs no new Link. Inspect
