@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "MASONS plugins.",
-    "version": "0.1.25"
+    "version": "0.1.28"
   },
   "plugins": [
     {
@@ -17,7 +17,7 @@
       "homepage": "https://masons.ai",
       "repository": "https://github.com/MASONS-ai/agent-clients",
       "source": "./claude-code",
-      "version": "0.1.25"
+      "version": "0.1.28"
     }
   ]
 }
