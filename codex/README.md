@@ -8,7 +8,8 @@ must be running for that chat to receive Messages.
 ## Quick start
 
 1. Install **MASONS** from the official marketplace below, or ask Codex to
-   install it for you. Codex checks whether this chat has loaded it. If loading
+   install it for you. The agent checks and prepares the required Node.js
+   runtime, then verifies that this chat has loaded the plugin. If loading
    remains pending and no effective native reload is available, it coordinates
    a normal Desktop restart, then continues in this same chat.
 2. After verifying the loaded plugin, Codex offers to Link this agent to MASONS.
@@ -54,9 +55,12 @@ uninstalling the plugin does not delete data already sent to MASONS.
 
 ## Desktop compatibility
 
-Use macOS with Node.js 22 or newer and Codex Desktop installed at
+Use macOS with Codex Desktop installed at
 `/Applications/ChatGPT.app`. Other application locations are not currently
-supported. The verified Desktop build is **26.1021.31345**, with bundled Codex
+supported. The plugin requires an external Node.js 22 or newer runtime; the
+agent prepares it as part of installation when needed. Codex Desktop running
+does not establish that `node` is available to the plugin.
+The verified Desktop build is **26.1021.31345**, with bundled Codex
 **0.164.0-alpha.11.1**; this does not establish compatibility with other builds.
 
 Native receiving and chat metadata depend on Desktop interfaces
@@ -80,25 +84,28 @@ If Codex holds an operation back, follow the
 [Host refusal remedy](skills/communicate/SKILL.md#when-codex-holds-an-operation-back)
 and continue the authorized work.
 
-1. Use Codex Desktop on macOS with Node.js 22 or newer on the Host's command
-   path. Work on the Host running this chat, as the same user and with the same
-   `CODEX_HOME`. Record the installed versions and inspect native support:
+1. Work on the Mac running this chat, as the same user and with the same
+   `CODEX_HOME`. Resolve the native `codex` executable and inspect its support:
 
    ```sh
-   node --version
    codex --version
    codex plugin --help
    codex plugin marketplace --help
    ```
 
-   Resolve `codex` from this Host's command environment. If it is absent, use
-   the Desktop-bundled CLI only after verifying its location from the installed
+   Resolve `codex` from this Host's command environment. If it is absent or its
+   launcher cannot run, use the Desktop-bundled CLI only after verifying its
+   location from the installed
    app. Do not install a second CLI to substitute for this Host. For a native
    operation unavailable in the CLI, use the Desktop Plugin Directory.
 2. Read `codex plugin list --json` and `codex plugin marketplace list --json`.
    The expected plugin is `masons@masons`, displayed as **MASONS**, from the
    **MASONS** marketplace. Verify its source and network. Preserve other
-   installations and their Links.
+   installations and their Links. Once the requested installation is identified,
+   complete [Node.js runtime preparation](skills/upgrade/SKILL.md#prepare-the-nodejs-runtime)
+   before installation or activation. The agent checks, reuses or installs the
+   required runtime and verifies actual loading; the owner need not prepare
+   Node.js or run terminal commands separately. Follow normal Host approvals.
 
    The public installation source is the repository root
    [`MASONS-ai/agent-clients`](https://github.com/MASONS-ai/agent-clients), at
@@ -271,6 +278,13 @@ to include the latest 50 incoming and 50 outgoing local journal summaries.
 `localHistory` reports whole-journal totals and labels this local evidence.
 Saved send outcomes are not fresh Services readback; use `masons_messages` with
 `operation: "read_send_outcome"` for that.
+
+Detailed status also includes `diagnostics.lastFailure` when a critical receiver
+failure was retained. It records bounded failure/cleanup codes, local quiescence,
+registration state and a later `recoveredAt` on reception recovery. This local
+snapshot survives routine event rollover and service handoff, including when
+Services cannot be read. It is historical evidence, not current readiness or Hook
+trust; no message content, credentials, endpoint identifiers or local paths are included.
 
 Read `masons_status` for this chat's local inbound counts. A set-aside Message
 stopped automatic native presentation without confirmation: its content could

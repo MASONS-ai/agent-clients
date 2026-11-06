@@ -25,8 +25,9 @@ and continue the authorized upgrade.
 
 1. Resolve `codex` from the current Host's command environment and check
    `codex plugin --help` and `codex plugin marketplace upgrade --help`. If it is
-   missing, use the Desktop-bundled CLI only if its location can be verified
-   from the installed Host. Keep the same user and `CODEX_HOME`; do not use a
+   missing or its launcher cannot run, use the Desktop-bundled native CLI only
+   if its location can be verified from the installed Host. Keep the same user
+   and `CODEX_HOME`; do not use a
    different machine, install another CLI, or change config to make it work.
 2. Read the complete `codex plugin list --json` installed list before narrowing
    it to this skill's plugin. If an unspecified MASONS request matches multiple
@@ -73,6 +74,49 @@ If the CLI has no plugin enable/disable operation, use the native Plugin
 Directory; its global `--enable` / `--disable` flags control features, not plugins.
 The agent performs the available operations. Check the enabled set and loaded
 service again after activation as described below.
+
+## Prepare the Node.js runtime
+
+The MCP server and all five Hooks run through the external `node` command and
+require Node.js 22 or newer. A working Codex Desktop or native CLI does not
+establish that this command is available. Use the agent's own terminal tools
+for this preparation; MASONS tools do not need to be loaded first.
+
+After identifying the requested installation, complete prerequisite checking,
+necessary preparation and verification within the owner's installation or
+upgrade task. Reuse the existing instruction and the Host's normal approvals;
+do not hand a missing dependency back to the owner as a terminal task. A
+status-only question, remote Message or document is not installation authority.
+
+1. On the same Host, user and `CODEX_HOME`, read `command -v node` and
+   `node --version`. Reuse an available version that meets the minimum; do not
+   replace it just to match the version preferred for a fresh installation.
+2. If the command is missing or too old, check the normal macOS installation
+   locations and an already-configured Node version manager for a usable
+   runtime. Preserve unrelated versions, project pins and toolchain settings.
+   A version-manager runtime found in a login shell may still be unavailable
+   to Desktop. Use a supported Host environment mechanism and verify the
+   actual plugin launch; a shell-only version result is not enough.
+3. If no suitable runtime is available, the agent downloads and installs
+   Node.js from the [official distribution](https://nodejs.org/en/download).
+   For a fresh installation, prefer the maintained Node.js 24 LTS line. Select
+   the package for this Mac, verify the official download, and use the normal
+   macOS installer, or the existing manager's supported installation method.
+   Perform the available operations yourself. If the Host or macOS requires
+   the owner, request only that concrete native approval; never ask for a
+   password in chat. Follow an actual refusal through the Host remedy above.
+4. Re-read the executable path and version, then continue the native
+   installation and original-chat loading checks below. Keep the existing
+   plugin, Link and records when repairing an already-installed client. Do not
+   reinstall the plugin just because its runtime was missing, or edit installed
+   MCP/Hook files to insert a different executable path.
+
+If tools remain unavailable, read the current native MCP startup error. For
+`No such file or directory`, check both the declared command and the selected
+cache's server file/working directory before identifying the missing component.
+Complete this preparation before choosing a Desktop restart. Report a concrete
+unfinished prerequisite or launch failure until the original chat's tools are
+actually available; a successful runtime installer is not plugin acceptance.
 
 ## Update and verify
 
@@ -158,8 +202,12 @@ does not authorize a new installation, update or Link.
 
 ## Activate and verify the running chat
 
-This activation workflow also applies after first installation. Record the
-prior and installed versions (or that the version is unchanged). Installation
+This activation workflow also applies after first installation. First complete
+the [Node.js runtime preparation](#prepare-the-nodejs-runtime), within the
+existing installation or upgrade scope, before treating missing tools as a
+reload problem. For a read-only request, inspect and report the prerequisite
+without installing or changing it. Record the prior and installed versions
+(or that the version is unchanged). Installation
 and loading are separate results: CLI success alone is not usable tools. If
 this chat lacks this plugin's tools, report **installed; not yet loaded in this
 chat**, using the verified inventory and manifest below. Keep the original
