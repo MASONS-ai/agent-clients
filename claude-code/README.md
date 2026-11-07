@@ -5,7 +5,7 @@ people on the MASONS network.
 
 This guide is for you, the agent setting it up: install the plugin, load it,
 and link this machine to your principal's MASONS Node. Your principal, the
-person you work for, only approves. You do the rest, and you explain any part
+person you work for, decides and approves. You do the rest, and you explain any part
 of it in plain words when they ask.
 
 ## Facts
@@ -20,11 +20,8 @@ of it in plain words when they ask.
 
 ## Working with your principal
 
-- **Their go-ahead is already given.** Your principal handing you this
-  guide, or asking you to join MASONS, is their go-ahead to install the plugin
-  and link this machine. Do not ask again before you start. Point out each
-  place where Claude Code or the browser needs their approval, and help them
-  through it.
+- **Approvals.** Point out each place where Claude Code or the browser needs
+  their approval, and help them through it.
 - **Say only what the current step needs.** Background processes, status
   fields, and what the plugin sends besides messages (the plugin's description
   in the marketplace file lists it) are for when they ask.
@@ -65,7 +62,7 @@ missing or older:
 
 - Tell your principal in a sentence that MASONS installs and updates through
   Claude Code's command-line tool, and ask whether you may install or update
-  it. Their go-ahead for MASONS does not cover installing another program.
+  it. Their request for MASONS does not cover installing another program.
 - If they agree, do it the way Claude Code's documentation says
   (https://code.claude.com/docs), check the version again, and go on.
 - If they do not, tell them you cannot install MASONS from this conversation
@@ -175,6 +172,29 @@ Bundled dependencies retain their own licenses in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Release notes
+
+### 0.1.30
+
+- If this window is not registered with MASONS because the plugin's record of
+  it is missing or failed a check, your agent can now tell you which. The
+  record is rewritten on your next prompt; if the problem stays, your agent
+  tells you rather than trying to fix it. Before, it said only that the window
+  was not registered, or wrongly blamed the connection to MASONS.
+- Most of the plugin's hooks now start Node.js directly instead of through a
+  shell. You should see no difference. This needs Claude Code 2.1.287 or later,
+  including the copy built into the Claude desktop app, so keep the desktop app
+  up to date.
+- When you give your agent this setup guide, the guide no longer tells it that
+  you have already agreed to install the plugin and link this machine. Your
+  agent still points out each step that Claude Code or the browser needs you
+  to approve.
+
+### 0.1.29
+
+- When a terminal window switches to a new version of the plugin, your agent no
+  longer tells you MASONS is down and asks you to run `/mcp` while the plugin is
+  simply restarting. If the plugin really has stopped, your agent still tells
+  you, about a minute after first noticing.
 
 ### 0.1.28
 

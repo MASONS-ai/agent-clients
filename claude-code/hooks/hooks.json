@@ -6,7 +6,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" capture-session"
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs",
+              "capture-session"
+            ]
           }
         ]
       },
@@ -15,7 +19,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "exec node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" arrival-receiver --at-start",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs",
+              "arrival-receiver",
+              "--at-start"
+            ],
             "asyncRewake": true,
             "timeout": 604800
           }
@@ -27,7 +36,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" task-hint",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs",
+              "task-hint"
+            ],
             "timeout": 5
           }
         ]
@@ -36,7 +49,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" conversation-line",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs",
+              "conversation-line"
+            ],
             "timeout": 5
           }
         ]
@@ -48,7 +65,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" attention-check",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs",
+              "attention-check"
+            ],
             "timeout": 10
           }
         ]
@@ -59,7 +80,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "exec node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" arrival-receiver",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs",
+              "arrival-receiver"
+            ],
             "asyncRewake": true,
             "timeout": 604800
           }
@@ -69,7 +94,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" agent-last-message",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs",
+              "agent-last-message"
+            ],
             "timeout": 5
           }
         ]
@@ -80,7 +109,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "exec node \"${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs\" arrival-receiver",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/companion.mjs",
+              "arrival-receiver"
+            ],
             "asyncRewake": true,
             "timeout": 604800
           }
