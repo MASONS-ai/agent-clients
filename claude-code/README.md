@@ -173,6 +173,40 @@ Bundled dependencies retain their own licenses in
 
 ## Release notes
 
+### 0.1.33
+
+- The plugin no longer uses Claude Code's cross-session inbox (added in
+  0.1.31). A message that arrives while your session is idle starts a turn in
+  a terminal and in the Claude desktop app as it did in 0.1.30, and in the VS
+  Code extension waits for your next prompt. `MASONS_INBOX_DOORBELL` no longer does anything.
+- The plugin no longer reports that your Session is waiting for you; nothing
+  showed it. Your terminal title still shows the plugin's state when the
+  session goes idle.
+- A turn started by an arriving message no longer shows up as your Session's
+  latest activity.
+
+### 0.1.32
+
+- No changes to how the plugin works. This version is built from MASONS's
+  main source repository.
+
+### 0.1.31
+
+- A message that arrives while your session is idle can now start a turn in
+  the VS Code extension too, through Claude Code's cross-session inbox, when
+  that is on. In a terminal and in the Claude desktop app the same inbox is
+  tried first, and the plugin's own way of waking the session still takes
+  over if it does not work. The turn opens with a short notice that carries
+  neither the sender nor the message; the message and who sent it are shown
+  as before. If Claude Code holds or refuses cross-session messages, a
+  message that arrives while you are away starts its turn about ten seconds
+  late in a terminal or the desktop app, usually once in each window, and in
+  VS Code waits for your next prompt as before. To turn this off, set `MASONS_INBOX_DOORBELL=off`.
+- A turn started by an arriving message no longer clears the sign that your
+  Session is waiting for you, and no longer reports the sender as your
+  Session's task. A slash command you type now clears that sign, since it
+  means you are back.
+
 ### 0.1.30
 
 - If this window is not registered with MASONS because the plugin's record of
