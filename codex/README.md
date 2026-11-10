@@ -247,7 +247,7 @@ the collection rules above.
 - Bound the initial Link request, including its response body, to five minutes.
   A visible tool timeout or cancellation can still be followed by completion of
   that same request; check status instead of starting another Link. Failed or
-  expired attempts remain retained until an explicitly requested replacement.
+  expired attempts remain retained until replacement.
 - Report the installed plugin version during native metadata requests and explain
   known Link and Desktop qualification failures without automatically retrying.
 

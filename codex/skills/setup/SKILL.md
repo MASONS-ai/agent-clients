@@ -110,10 +110,9 @@ start another handoff or cancel that retained request. Read status later for
 the same owner-choice URL if it finishes; after the budget is exhausted, the
 outcome remains unconfirmed. Never retry an uncertain poll automatically.
 
-For an expired or uncertain browser handoff, explain the retained result. A
-new Link requires an owner request; do not repeat it automatically. To
-replace the installation's Node Link, call `masons_link` with
-`replace: true` only on an explicit owner request. An existing usable Link remains usable
+For an expired or uncertain browser handoff, explain the retained result. Do not
+repeat Link automatically. To replace the installation's Node Link, call
+`masons_link` with `replace: true`. An existing usable Link remains usable
 until the new browser Link and canonical identity are verified. The plugin then
 quiesces old receivers internally and switches to a fresh grant estate. Old
 credentials and unknown operations remain retained, never imported into the new Link.

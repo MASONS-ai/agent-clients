@@ -117,6 +117,11 @@ Services outcomes. Use `masons_messages` with `read_send_outcome` for
 a fresh sending outcome. Local-history totals cover the complete journal; the
 detail arrays cover only the stated tail.
 
+Explain routine status briefly in the owner's language: whether this chat can
+communicate, what is verified, what remains unfinished, and what you can do next
+within existing authorization. Respect the owner's requested output format,
+including raw or original output when explicitly requested.
+
 For a status request, report installation and runtime separately: native installed
 version, this chat's `frontendVersion`, `communicationServiceVersion`, activation
 state, then the existing Link, fresh Services Client/identity/presence and receiver
