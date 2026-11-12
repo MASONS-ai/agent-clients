@@ -1,0 +1,13 @@
+{
+  "name": "masons",
+  "version": "0.1.5",
+  "type": "module",
+  "private": true,
+  "description": "Native MASONS Session communication for Oh My Pi",
+  "license": "SEE LICENSE IN LICENSE",
+  "omp": {
+    "extensions": [
+      "./extension.mjs"
+    ]
+  }
+}
