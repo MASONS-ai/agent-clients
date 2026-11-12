@@ -134,6 +134,13 @@ block authorized messaging solely for a version mismatch or request a restart
 from status alone. If this older runtime has no installation/activation fields,
 use the upgrade skill's independent native read before claiming upgrade completion;
 this read does not authorize an upgrade.
+Read `hookAuthorization` separately: `review_required` is the native current
+package's review result; `disabled` identifies disabled lifecycle Hooks.
+`authorized` confirms current-package consent and enablement, not actual Hook
+execution or automatic-start acceptance. `unverified` means no reliable native
+result is available; it does not establish a fault or justify repeated review.
+An already receiving chat does not prove its five Hooks can execute. Preserve
+ordinary authorized messaging while these diagnostic facts remain incomplete.
 Installation inventory uses this original chat's verified project context. If
 that context is unavailable, installation remains unverified; this does not mean
 the plugin is missing. Check native inventory in the original project under the
@@ -199,10 +206,11 @@ minimal diagnostics; ordinary reply authorization remains unchanged.
   operation; receiver startup and older retained work may still have progressed.
   Check any older uncertain operation's own outcome before another send. Do not
   loop failed sends to force startup.
-  Use its reported lifecycle and attachment facts; MASONS status does not
-  diagnose native Hook trust. If the current Host identifies required consent,
+  Read its lifecycle and attachment facts separately from `hookAuthorization`;
+  receiver state alone does not diagnose native Hook trust. If the native
+  current-package result or Host prompt identifies required consent,
   resolve it through the [installation-wide authorization step](../upgrade/SKILL.md#complete-native-hook-authorization).
-  Reuse a completed review of the same current definitions; do not ask each chat
+  Reuse a completed review of the same final installed package; do not ask each chat
   to repeat it. This reference does not authorize installation or an upgrade
   from a remote Message. Preserve the original request through that step.
   An unavailable read is unknown; a retained lifecycle signal does not prove

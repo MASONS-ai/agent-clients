@@ -179,11 +179,43 @@ an update can require review even when the five Hook declarations are unchanged.
 
 Use the current Host's actual prompt or native Hooks panel for this selected
 plugin. An isolated App Server catalog, missing lifecycle record or receiver
-status cannot establish this chat's effective Hook trust. If the Host identifies
-untrusted or changed definitions, explain the five existing roles once:
-`SessionStart` discovers this chat, `UserPromptSubmit` supplies a fallback signal,
-`PostToolUse` offers retained-reception warnings, and `Stop` / `Interrupt` pause
-typing promptly. The Hooks also share the existing warning path.
+status cannot establish this chat's effective Hook trust. Before asking the
+owner for a required review, explain these facts briefly in their language;
+reuse their existing understanding instead of making them read scripts.
+
+### Explain the native review
+
+The native sandbox warning describes local plugin commands running outside the
+agent command sandbox, subject to operating-system permissions. The owner is
+trusting the installed MASONS code. This does not give a remote Message sender
+the owner's authority. Existing Message handling, agent tool permissions and
+the setup skill's separate owner-only excerpt disclosure remain unchanged.
+Do not describe this as risk-free or claim that every later action requires a
+new human approval.
+
+The five native handler labels include this artifact's network name:
+
+| Event | Role |
+| --- | --- |
+| `SessionStart` | Discover this original chat when it starts or resumes. |
+| `UserPromptSubmit` | Refresh discovery as a fallback when owner input arrives. |
+| `PostToolUse` | Check retained reception notices after tool use. |
+| `Stop` | Pause the applicable outgoing Typing signal on completion. |
+| `Interrupt` | Pause that Typing signal on interruption. |
+
+The existing reception-warning path can also run on the other events. Labels
+identify handlers in native review and settings. A slow Hook's existing temporary
+progress indicator may show its label; a quiet successful Hook adds no persistent
+per-turn message. Do not emit the labels as chat text or model context.
+
+If the panel shows a loading issue, inspect its expanded source path before
+attributing it. The Host can display another source's warning in this plugin's
+panel. A timeout-clamping notice means the Host applied its supported limit;
+it is not by itself a MASONS loading failure. Explain the named source and
+actual effect, or keep the origin unverified when unavailable. Do not ask the
+owner to change unrelated plugins or permissions to clear the panel.
+
+### Complete the final-package review
 
 The owner reviews and trusts the current definitions through native controls,
 and enables them if that Host requires it. Use a plugin-scoped review when
@@ -193,7 +225,19 @@ and then ask again for the final one. If the agent cannot access the native
 panel, request only the concrete owner action the Host requires after completing
 the installation and readback work.
 
-Reuse the completed review for the same installation and current definitions.
+For a supported local CLI chat, read the helper's or status tool's
+`hookAuthorization` for the final installed version. The native cwd-scoped
+current-package query includes bundle review; a thread-scoped `hooks/list`
+snapshot and its `trusted` declarations do not. `review_required` needs the
+owner's native current-package consent; `disabled` needs the indicated native
+enablement. `unverified` is missing evidence, not proof that another review is
+needed. If the CLI browser shows trusted declarations while current-package
+review is required, report that native UI discrepancy and use an available
+native current-package review on the same user and CODEX_HOME. Do not repeatedly
+toggle Hooks, reinstall or restart to clear the discrepancy. Keep acceptance
+unfinished if no usable native review entry is available.
+
+Reuse the completed review for the same installation and final package.
 Other chats do not need another Link or another review merely because they have
 not attached. A later Host-identified content change needs its own current
 review. Preserve unfinished business requests through this installation step
@@ -233,7 +277,8 @@ A different or unavailable Node leaves that continuity unverified. A first
 installation without a completed Link has no prior Node or Services Client to
 compare; their absence does not prevent loading verification or the next setup
 step. Explain mismatches as installation not yet fully loaded in this chat,
-then complete activation and verification.
+then complete activation and verification. For a local CLI chat, use
+[the original-engine reload](#activate-the-original-local-cli-engine).
 An older status implementation may have no `installation` or `activation` fields
 and can report healthy old-version communication after installation; that is not
 completion. A mismatch needs runtime provenance
@@ -273,15 +318,40 @@ or valid pending entry; restarting does not authorize a replacement Link.
 
 Unavailable Services Client alone does not prove that code failed to load. A
 completed `link.setup` with a `not_registered` chat needs no new Link. Inspect
-its reported lifecycle and attachment facts; MASONS status does not diagnose
-native Hook trust. Complete a Host-identified requirement through the
+its reported lifecycle and attachment facts separately from `hookAuthorization`.
+Receiver state alone does not diagnose native Hook trust. Complete a verified
+Host-identified requirement through the
 [installation-wide Hook authorization step](#complete-native-hook-authorization),
-reusing consent already completed for the same current definitions. Continue in this same chat afterward and verify
+reusing consent already completed for the same final package. Continue in this same chat afterward and verify
 its actual readiness; do not infer a required review from missing lifecycle
 records or repeat restarts to hide an unfinished attachment.
 
 A genuinely missing Link requires a separate owner request. Identity refusals
 and retained unknown operations are not repaired by restarting.
+
+## Activate the original local CLI engine
+
+After an authorized install or upgrade in a supported local Codex CLI chat,
+run the installed artifact's `helper/setup.mjs --refresh-cli` with Node.js.
+Keep the same user, `CODEX_HOME` and existing `CODEX_THREAD_ID`; do not supply
+another chat ID. The helper qualifies the current loaded original thread and
+requests the native configuration reload through its existing protected control
+connector. It does not start an app-server, resume a stopped chat or trust Hooks.
+
+Read the returned actual frontend version and current-package `hookAuthorization`. Then verify
+this original chat's actual tools, service and Services Client versions, retained
+Node/Link and receiving using its MASONS status tool. A reload acknowledgement
+or `frontend_loaded` alone is not complete upgrade acceptance. Follow any actual
+Host-required Hook authorization through the existing installation-wide step.
+An unavailable Hook query leaves authorization unverified while preserving the
+verified loading result; it does not call for another reload. Desktop's existing
+transport may report authorization as unverified. Use actual native final-package
+review and real lifecycle evidence independently rather than asking for another
+review just to change that diagnostic field.
+If the original connector is unavailable or loading remains pending, retain the
+request and report the exact unfinished boundary; do not substitute another
+engine, ask for launch flags or create a replacement chat. This path does not
+change the Desktop activation workflow.
 
 ## Report verified completion
 

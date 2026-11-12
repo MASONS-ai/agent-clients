@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Link this Codex installation to MASONS from the current Desktop chat. Use for owner Link, connect, or setup requests and the Link step after agent-led installation; not plugin lifecycle work.
+description: Link this Codex installation to MASONS from the current Desktop or supported local CLI chat. Use for owner Link, connect, or setup requests and the Link step after agent-led installation; not plugin lifecycle work.
 ---
 
 # MASONS Link
@@ -9,7 +9,7 @@ This skill acts only on this artifact's network. Each network has its own Link;
 never copy credentials between networks.
 
 Use this skill for an owner's Link request or to continue agent-led installation
-in the original Desktop chat. Once installation and loaded tools are verified,
+in the original Desktop or supported local CLI chat. Once installation and loaded tools are verified,
 read status yourself and reuse a completed Link or valid pending entry.
 If neither exists, offer linking this agent to MASONS as the next step
 and ask whether to start now, rather than asking whether the owner wants to use
@@ -71,7 +71,9 @@ and continue the requested setup.
    the owner to Link each chat separately.
    For first-install onboarding, finish any Host-required review through the
    [installation-wide Hook authorization step](../upgrade/SKILL.md#complete-native-hook-authorization).
-   Reuse consent already completed for the same installed definitions; a new
+   Explain the named roles and native sandbox warning through that shared
+   guidance before asking the owner to review. Reuse consent already completed
+   for the same final installed package; a new
    chat alone is not a reason to request it again. This step does not install
    or update the plugin as part of Link.
 3. Use `masons_status` to read the result. Report installation setup and
@@ -87,8 +89,11 @@ and continue the requested setup.
    Use the reported setup, lifecycle and attachment facts. A missing signal or
    unavailable read does not establish disabled or untrusted Hooks. Request
    the installation-wide review only when the current Host identifies a
-   required step; do not infer one from MASONS status or repeat a completed
-   review for each chat. Preserve the original request and
+   required step, including a verified `hookAuthorization=review_required`
+   current-package result. `unverified` is missing evidence, not a request to
+   review again; a receiving chat or trusted thread declarations do not prove
+   package authorization. Reuse completed native review for the same final
+   package across chats. Preserve the original request and
    retained Link. Never approve for the owner, copy trust, simulate a Hook,
    repeat Link or repeatedly restart to hide an unfinished attachment.
    Finish startup confirmation in this flow. Once `linked`, Services `online`,
