@@ -5,6 +5,28 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 const MAX_CONTENT_BYTES = 65536;
 const SEND_MEDIA = 'application/vnd.masons.icm-messaging-v2+json';
 const PROGRESS = new Set(['accepted', 'delivered', 'presented']);
+const OPERATIONS = new Set(['identity', 'registration', 'endpoint_list', 'endpoint_read', 'endpoint_retirement', 'session_name', 'typing', 'control_ack', 'receipt', 'send', 'outcome', 'directory', 'history', 'profile', 'connections', 'link', 'other']);
+function operation(path, method) {
+  const route = path.split('?')[0];
+  if (route.startsWith('runtime-endpoints')) return route.endsWith('/display-metadata') ? 'session_name' : method === 'DELETE' ? 'endpoint_retirement' : method === 'POST' ? 'registration' : route === 'runtime-endpoints' ? 'endpoint_list' : 'endpoint_read';
+  if (route === 'runtime/typing') return 'typing';
+  if (route === 'runtime/control-ack') return 'control_ack';
+  if (route === 'runtime/receipts') return 'receipt';
+  if (route === 'messages') return 'send';
+  if (route.startsWith('messages/') || route.startsWith('sending-attempts/')) return 'outcome';
+  if (route.startsWith('runtime/icm-profile')) return 'profile';
+  if (route.startsWith('me/connection')) return 'connections';
+  if (route.startsWith('cli-handoff/')) return 'link';
+  if (route.startsWith('discovery/') || route.startsWith('runtime/member-send') || route.startsWith('runtime/undispatched') || route.startsWith('runtime/dispatch')) return 'directory';
+  if (route === 'runtime/session-conversations' || route === 'runtime/session-conversation-history') return 'history';
+  if (route === 'me/identity' || route === 'whoami') return 'identity';
+  return 'other';
+}
+export function requestDiagnostics(error) {
+  const value = error?.diagnostics;
+  if (error?.code !== 'services_timeout' || !OPERATIONS.has(value?.operation) || !['elapsed_ms', 'deadline_ms'].every((key) => Number.isSafeInteger(value[key]) && value[key] >= 0)) return undefined;
+  return { operation: value.operation, elapsed_ms: value.elapsed_ms, deadline_ms: value.deadline_ms };
+}
 
 export class Refusal extends Error {
   constructor(code, status) {
@@ -245,7 +267,7 @@ export class Services {
     const controller = new AbortController(), abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) controller.abort();
-    const timer = setTimeout(abort, this.requestTimeoutMs); timer.unref?.();
+    const started = performance.now(), timer = setTimeout(abort, this.requestTimeoutMs); timer.unref?.();
     try {
       const response = await this.fetch(url, { method, headers: merged, redirect: 'manual', signal: controller.signal,
         ...(body !== undefined && { body: JSON.stringify(body) }) });
@@ -281,7 +303,11 @@ export class Services {
       return value;
     } catch (error) {
       if (error instanceof Refusal) throw error;
-      if (controller.signal.aborted) throw new Refusal(signal?.aborted ? 'operation_aborted' : 'services_timeout');
+      if (controller.signal.aborted) {
+        const failure = new Refusal(signal?.aborted ? 'operation_aborted' : 'services_timeout');
+        if (!signal?.aborted) failure.diagnostics = { operation: operation(path, method), elapsed_ms: Math.max(0, Math.round(performance.now() - started)), deadline_ms: this.requestTimeoutMs };
+        throw failure;
+      }
       throw new Refusal('services_network_unconfirmed');
     } finally {
       clearTimeout(timer); signal?.removeEventListener('abort', abort);

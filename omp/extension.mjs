@@ -2,7 +2,7 @@ import { CONFIG } from './build-config.mjs';
 import { Client, REMOTE_NOTICE } from './client.mjs';
 import { Store, fault, fingerprint } from './store.mjs';
 import { Owner, settings, dataRoot } from './owner.mjs';
-import { Services } from './services.mjs';
+import { Services, requestDiagnostics } from './services.mjs';
 
 const result = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
 const code = (error) => /^[a-z0-9_]{1,100}$/u.test(error?.code ?? '') ? error.code : 'omp_client_unavailable';
@@ -11,6 +11,10 @@ export function registerOmp(pi, { config = CONFIG, store = new Store(dataRoot(co
   const owner = new Owner(config, { store, ...(makeServices && { makeServices: (credential) => makeServices(credential, () => {}) }) });
   let current, client, binding, unregister, transition = false, closing = false, serial = Promise.resolve(), timer, generation = 0;
   let retirement = Promise.resolve();
+  let maintenance;
+  const problems = new Map();
+  let overflow;
+  const diagnostics = () => ({ recent_problems: [...problems.values(), ...(overflow ? [overflow] : [])].map(({ notified, ...value }) => ({ ...value })) });
   const sid = (ctx) => ctx?.sessionManager.getSessionId();
   const eligible = (ctx) => ctx?.agent?.kind === 'main' && typeof sid(ctx) === 'string' && /^[a-f0-9-]{36}$/u.test(sid(ctx));
   const native = (ctx) => {
@@ -27,8 +31,28 @@ export function registerOmp(pi, { config = CONFIG, store = new Store(dataRoot(co
     if (closing || transition || !binding || !same(binding) || binding.session.isSessionTransitioning || sid(current) !== root) throw fault('native_binding_changed');
   };
   const notify = (message, level = 'info') => current?.ui?.notify?.(message, level);
-  const problem = (message) => { console.error(`${config.label} for OMP: ${message}`); notify(`${config.label}: ${message}`, 'warning'); };
-  const enqueue = (run) => { const task = serial.then(run); serial = task.catch((e) => problem(code(e))); return task; };
+  const problem = (message, error) => {
+    message = /^[a-z0-9_]{1,100}$/u.test(message) ? message : 'omp_client_unavailable';
+    const request = requestDiagnostics(error), key = `${message}:${request?.operation ?? ''}`, now = Date.now();
+    let row = problems.get(key);
+    if (!row && overflow?.notified !== undefined && now >= overflow.notified && now - overflow.notified < 60_000) row = overflow;
+    if (!row) {
+      if (problems.size >= 16) {
+        const expired = [...problems].find(([, value]) => now < value.notified || now - value.notified >= 60_000);
+        if (expired) problems.delete(expired[0]);
+      }
+      if (problems.size >= 16) row = overflow ??= { overflow: true, occurrences: 0, suppressed: 0, notified: undefined };
+      else { row = { code: message, occurrences: 0, suppressed: 0, notified: undefined }; problems.set(key, row); }
+    }
+    delete row.request;
+    Object.assign(row, { code: message, last_at: now, occurrences: row.occurrences + 1, ...(request && { request }) });
+    if (row.notified !== undefined && now >= row.notified && now - row.notified < 60_000) { row.suppressed++; return; }
+    const detail = request ? ` (${request.operation}, ${request.elapsed_ms}ms elapsed, ${request.deadline_ms}ms deadline)` : '';
+    const repeated = (row.suppressed ? `; ${row.suppressed} repeated warnings suppressed` : '') + (row.overflow ? '; further problem categories coalesced; inspect status' : '');
+    row.notified = now; row.suppressed = 0;
+    console.error(`${config.label} for OMP: ${message}${detail}${repeated}`); notify(`${config.label}: ${message}${detail}${repeated}`, 'warning');
+  };
+  const enqueue = (run) => { const task = serial.then(run); serial = task.catch((e) => problem(code(e), e)); return task; };
   const stop = (retire) => {
     const held = client; client = undefined;
     const stopped = held?.close({ retire }) ?? Promise.resolve();
@@ -44,7 +68,7 @@ export function registerOmp(pi, { config = CONFIG, store = new Store(dataRoot(co
     if (found) {
       unregister = found.session.registerSessionChangeCallback(() => { void suspend(current); });
       found.session.addDisposer(() => {
-        if (binding?.ref === found.ref && binding.session === found.session) void close().catch((error) => problem(code(error)));
+        if (binding?.ref === found.ref && binding.session === found.session) void close().catch((error) => problem(code(error), error));
       });
     }
     return found;
@@ -65,7 +89,7 @@ export function registerOmp(pi, { config = CONFIG, store = new Store(dataRoot(co
           transition = false;
           await activate(current);
         });
-      })().catch((error) => problem(code(error)));
+      })().catch((error) => problem(code(error), error));
     }
     return stopped;
   };
@@ -75,7 +99,7 @@ export function registerOmp(pi, { config = CONFIG, store = new Store(dataRoot(co
       if ((!row?.retirement && !row?.retirementUnconfirmed) || row.credential !== fingerprint(credential)) continue;
       try {
         await new Client({ config, store, credential, root: row.root, host: { problem }, makeServices }).reconcileRetirement();
-      } catch (error) { problem(code(error)); }
+      } catch (error) { problem(code(error), error); }
     }
   };
   const activate = async (ctx) => {
@@ -117,7 +141,7 @@ export function registerOmp(pi, { config = CONFIG, store = new Store(dataRoot(co
         } } });
     client = next;
     try { await next.start(); }
-    catch (error) { if (client === next) client = undefined; problem(code(error)); }
+    catch (error) { if (client === next) client = undefined; problem(code(error), error); }
   };
   const requireClient = async (ctx) => {
     if (!eligible(ctx)) throw fault('native_main_session_required');
@@ -130,16 +154,16 @@ export function registerOmp(pi, { config = CONFIG, store = new Store(dataRoot(co
   };
   const status = async (ctx) => {
     if (!eligible(ctx)) throw fault('native_main_session_required');
-    if (client && !client.closed && client.root === sid(ctx)) return client.status();
+    if (client && !client.closed && client.root === sid(ctx)) return { ...await client.status(), Diagnostics: diagnostics() };
     const held = settings(store), result = { Link: { state: held.credential ? 'linked' : held.candidate ? 'setup_pending' : 'not_linked', receiver: !native(ctx) ? 'native_host_unavailable' : transition || native(ctx).session.isSessionTransitioning ? 'native_transition' : 'not_registered', receipt_ceiling: 'delivered' }, Identity: null, Presence: null, Client: null };
-    if (!held.credential) return result;
+    if (!held.credential) return { ...result, Diagnostics: diagnostics() };
     const api = makeServices ? makeServices(held.credential, () => {}) : new Services({ api: config.api, credential: held.credential });
     const identity = await api.identity(); result.Identity = { handle: identity.handle, address: identity.address };
     const journal = store.read(store.journal(held.credential, sid(ctx)));
     if (journal?.registration?.state === 'active') {
       const row = await api.owned(journal.registration); result.Presence = row.presence; result.Client = row.client;
     }
-    return result;
+    return { ...result, Diagnostics: diagnostics() };
   };
   const tool = (name, description, parameters, execute, approval = 'read', passive = false) => pi.registerTool({
     name: config.prefix + name, label: `${config.label} ${name}`, description, parameters, approval, loadMode: 'essential',
@@ -152,7 +176,7 @@ export function registerOmp(pi, { config = CONFIG, store = new Store(dataRoot(co
         active?.assert();
         if (signal?.aborted && name !== 'send') throw fault('native_call_cancelled');
         return output?.content ? output : result(output);
-      } catch (error) { return result({ error: code(error), retry: false }); }
+      } catch (error) { return result({ error: code(error), retry: false, ...(passive && { Diagnostics: diagnostics(), ...(requestDiagnostics(error) && { request: requestDiagnostics(error) }) }) }); }
     },
   });
   const z = pi.zod;
@@ -188,16 +212,20 @@ export function registerOmp(pi, { config = CONFIG, store = new Store(dataRoot(co
     if (attach(ctx)?.session.isSessionTransitioning) void suspend(ctx);
     else await enqueue(() => activate(ctx));
     timer = setInterval(() => {
-      if (closing || !eligible(current)) return;
+      if (closing || !eligible(current) || maintenance) return;
       if (binding?.session.isSessionTransitioning && !transition) { void suspend(current); return; }
       if (transition) return;
-      void enqueue(async () => {
+      const epoch = generation;
+      const task = enqueue(async () => {
+        if (closing || transition || generation !== epoch) return;
         const held = settings(store);
         if (held.candidate?.state === 'received') await owner.qualify();
         else if (held.candidate?.state === 'pending') await owner.poll();
         await activate(current);
         if (client && !client.closed && client.streamOpen) await client.maintain();
-      }).catch(() => {});
+      });
+      maintenance = task;
+      void task.finally(() => { if (maintenance === task) maintenance = undefined; }).catch(() => {});
     }, 3000); timer.unref?.();
   });
   for (const event of ['session_before_switch', 'session_switch', 'session_before_branch', 'session_branch', 'session_before_tree', 'session_tree']) {
@@ -211,13 +239,13 @@ export function registerOmp(pi, { config = CONFIG, store = new Store(dataRoot(co
   pi.on('context', (event, ctx) => {
     current = ctx;
     if (!transition && client && !client.closed && sid(ctx) === client.root) {
-      try { client.observe(event.messages); } catch (error) { problem(code(error)); }
+      try { client.observe(event.messages); } catch (error) { problem(code(error), error); }
     }
   });
   pi.on('agent_end', (_event, ctx) => {
     current = ctx;
     if (!transition && client && !client.closed && sid(ctx) === client.root) {
-      try { client.endTurn(); } catch (error) { problem(code(error)); }
+      try { client.endTurn(); } catch (error) { problem(code(error), error); }
     }
   });
   const close = () => {
@@ -245,7 +273,7 @@ export function registerOmp(pi, { config = CONFIG, store = new Store(dataRoot(co
         if (!eligible(current) || sid(current) !== root || transition || !isSameBinding(before, settings(store))) throw fault('owner_context_changed');
         const answer = await enqueue(() => action === 'link' ? owner.begin(words[1]) : owner.cancel(candidate));
         notify(JSON.stringify(answer));
-      } catch (error) { problem(code(error)); }
+      } catch (error) { problem(code(error), error); }
     },
   });
   return { get client() { return client; }, close };

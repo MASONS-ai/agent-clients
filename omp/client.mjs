@@ -177,7 +177,7 @@ export class Client {
       await sleep(2000, this.abort.signal);
     }
   }
-  problem(error) { if (!this.closed) this.host.problem(error.code ?? 'receiver_unavailable'); }
+  problem(error) { if (!this.closed) this.host.problem(error.code ?? 'receiver_unavailable', error); }
   fence(reason) {
     if (this.closed) return;
     try { this.store.update(this.key, (data) => { if (!data || data.root !== this.root || data.credential !== fingerprint(this.credential)) throw fault('journal_scope_unreadable'); return { ...data, registration: data.registration && { ...data.registration, state: 'fenced', reason } }; }); }
@@ -278,7 +278,7 @@ export class Client {
               await api.controlAck(control.id);
               save((data) => { data.controls.find((c) => c.id === control.id).acked = true; return data; });
             }
-          } catch (error) { this.host.problem(error.code ?? 'control_reconciliation_unconfirmed'); }
+          } catch (error) { this.host.problem(error.code ?? 'control_reconciliation_unconfirmed', error); }
         }
       } finally { if (ownLease) lease.release(); }
     };
@@ -574,7 +574,7 @@ export class Client {
           data.retirement = null; data.retirementUnconfirmed = false; return data;
         });
         return true;
-      } catch (error) { this.host.problem(error.code ?? 'retirement_unconfirmed'); return false; }
+      } catch (error) { this.host.problem(error.code ?? 'retirement_unconfirmed', error); return false; }
       finally { if (ownLease) lease.release(); }
     };
     this.retirementWork = work().finally(() => { this.retirementWork = undefined; });
@@ -597,7 +597,7 @@ export class Client {
         // Do not delete an endpoint while its original ensure can still recreate it.
         await this.registering?.catch(() => {});
         if (retire && this.read().retirement) await this.reconcileRetirement();
-      } catch (error) { this.host.problem(error.code ?? 'retirement_unconfirmed'); }
+      } catch (error) { this.host.problem(error.code ?? 'retirement_unconfirmed', error); }
       finally { lease?.release(); if (this.lease === lease) this.lease = undefined; }
     })();
     return this.closePromise;
