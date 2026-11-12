@@ -1,0 +1,10 @@
+# Generated artifact identity; not selected by runtime configuration.
+VERSION = "0.1.14"
+CHANNEL = "production"
+PLATFORM = "masons"
+LABEL = "MASONS"
+PREFIX = "masons_"
+SECRET_PREFIX = "MASONS_HERMES_"
+REPOSITORY = "https://github.com/MASONS-ai/agent-clients.git"
+API = "https://api.masons.ai"
+WEB = "https://masons.ai"
