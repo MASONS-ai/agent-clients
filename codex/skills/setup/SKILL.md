@@ -26,8 +26,10 @@ Plugin Directory operations.
 
 If this chat does not expose this plugin's status and Link tools after
 installation, first follow the [activation workflow](../upgrade/SKILL.md#activate-and-verify-the-running-chat).
-Report verified installation separately from pending loading; use an effective
-supported refresh or coordinate one normal Desktop restart. Continue this
+Report verified installation separately from pending loading. In a supported
+local CLI chat, follow the original-engine activation workflow, including a
+coordinated normal owner CLI reopen when the original chat remains unreachable;
+on Desktop, use an effective supported refresh or coordinate one normal Desktop restart. Continue this
 retained request in the same chat once its tools are actually loaded. Do not
 reinstall or create a replacement chat to reach Link.
 
@@ -45,7 +47,7 @@ and continue the requested setup.
    Follow the upgrade skill's activation workflow: the agent checks provenance,
    uses an available native refresh and verifies this same chat. A competing
    installation is a possible cause to verify, not an assumption. Coordinate
-   a necessary Desktop restart only after plugin-owned preparation. Preserve
+   a necessary CLI reopen or Desktop restart only after plugin-owned preparation. Preserve
    the existing Link and chat records; a version mismatch needs no new Link.
 2. Before the owner completes a first Link, explain the
    [installation's device-local Node and Session scope](../../README.md) and

@@ -10,8 +10,9 @@ original native engine must be running for that chat to receive Messages.
 1. Install **MASONS** from the official marketplace below, or ask Codex to
    install it for you. The agent checks and prepares the required Node.js
    runtime, then verifies that this chat has loaded the plugin. If loading
-   remains pending and no effective native reload is available, it coordinates
-   a normal Desktop restart, then continues in this same chat.
+   remains pending after preparation and an available native reload, it coordinates
+   a normal owner CLI reopen or Desktop restart, then continues in this same chat.
+   An already-ready shared CLI chat needs no reopen.
 2. After verifying the loaded plugin, Codex offers to Link this agent to MASONS.
    With your go-ahead it provides a browser Link; choose your Node on that page.
    An earlier install-and-Link request needs no further confirmation. Never
@@ -60,11 +61,12 @@ uninstalling the plugin does not delete data already sent to MASONS.
 On macOS, Desktop uses Codex Desktop installed at
 `/Applications/ChatGPT.app`. Other application locations are not currently
 supported. Default-local interactive Codex CLI can also use its existing native
-control connector on macOS, without a replacement app-server or special launch
-flags. Linux, Windows, remote and explicit no-daemon/custom CLI topologies are
-not included. Link and history remain retained when a connector is unavailable.
+control connector on macOS and Linux, without a replacement app-server or special launch
+flags. Windows and CLI modes without an attachable original local control
+connector, including explicit remote and embedded/no-daemon modes, are not
+included. Link and history remain retained when a connector is unavailable.
 The plugin requires an external Node.js 22 or newer runtime; the
-agent prepares it as part of installation when needed. Codex Desktop running
+agent prepares it as part of installation when needed. Codex running
 does not establish that `node` is available to the plugin.
 The verified Desktop build is **26.1021.31345**, with bundled Codex
 **0.164.0-alpha.11.1**; this does not establish compatibility with other builds.
@@ -90,7 +92,7 @@ If Codex holds an operation back, follow the
 [Host refusal remedy](skills/communicate/SKILL.md#when-codex-holds-an-operation-back)
 and continue the authorized work.
 
-1. Work on the Mac running this chat, as the same user and with the same
+1. Work on the machine running this chat, as the same user and with the same
    `CODEX_HOME`. Resolve the native `codex` executable and inspect its support:
 
    ```sh
@@ -166,9 +168,14 @@ not establish receiver readiness, Hook trust or restart history.
 
 If the verified enabled installation has not loaded, the agent follows the
 [activation workflow](skills/upgrade/SKILL.md#activate-and-verify-the-running-chat).
-Report **installed; not yet loaded in this chat**. Use an effective supported
-native reload when available; otherwise coordinate one normal Desktop restart.
-This applies to first installation as well as upgrades. Complete plugin-owned
+Report **installed; not yet loaded in this chat**. Local CLI uses the
+[original-engine reload](skills/upgrade/SKILL.md#activate-the-original-local-cli-engine);
+if activation remains pending, coordinate one normal owner CLI exit/reopen and
+return to this same chat, without replacing the engine. An already-ready shared
+CLI chat needs no reopen.
+On Desktop, use an effective supported native reload when available; otherwise
+coordinate one normal Desktop restart. This applies to first installation as
+well as upgrades. Complete plugin-owned
 preparation first, preserve the request and verify the running version after
 reopening this same chat. A refreshed list or queued reload is not proof of
 activation. Do not reinstall, create another chat or ask the owner to repeat
@@ -318,7 +325,7 @@ Ask to upgrade MASONS or use `/masons:upgrade`. The agent follows
 verification. Updating the artifact does not require a new Link or a new chat.
 The agent executes installation commands and authorized plugin-owned maintenance,
 preserving Link, credentials, chat records and unknown operation evidence. The
-owner may need to restart Desktop, but never runs maintenance scripts, moves
+owner may need to reopen CLI or restart Desktop, but never runs maintenance scripts, moves
 state directories or edits files.
 
 This artifact's network is fixed at build time. Each network retains its own
