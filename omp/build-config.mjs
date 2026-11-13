@@ -1,5 +1,5 @@
 export const CONFIG = Object.freeze({
-  "version": "0.1.6",
+  "version": "0.1.7",
   "channel": "production",
   "identity": "masons",
   "label": "MASONS",

@@ -14,7 +14,7 @@ function operation(path, method) {
   if (route === 'runtime/receipts') return 'receipt';
   if (route === 'messages') return 'send';
   if (route.startsWith('messages/') || route.startsWith('sending-attempts/')) return 'outcome';
-  if (route.startsWith('runtime/icm-profile')) return 'profile';
+  if (route.startsWith('runtime/icm-profile') || route === 'profiles/view') return 'profile';
   if (route.startsWith('me/connection')) return 'connections';
   if (route.startsWith('cli-handoff/')) return 'link';
   if (route.startsWith('discovery/') || route.startsWith('runtime/member-send') || route.startsWith('runtime/undispatched') || route.startsWith('runtime/dispatch')) return 'directory';
@@ -377,6 +377,7 @@ export class Services {
     return managementRequest(value.request);
   }
   async readProfile({ signal } = {}) { return managementProfile(await this.request('runtime/icm-profile', undefined, { method: 'GET', signal })); }
+  async viewProfile(body, { signal } = {}) { return viewedProfile(await this.request('profiles/view', body, { signal, headers: { 'Cache-Control': 'no-store' } })); }
   async patchProfile(body, { signal } = {}) { return managementProfile(await this.request('runtime/icm-profile', body, { method: 'PATCH', signal })); }
 
   async identity() {
@@ -548,6 +549,56 @@ export class Services {
       socket.addEventListener('close', (event) => finish(signal?.aborted ? undefined : new Refusal(event.code === 1008 ? 'credential_ended' : 'stream_closed', event.code === 1008 ? 401 : undefined)));
     });
   }
+}
+
+export function viewedProfile(raw) {
+  const fail = () => { throw new Refusal('profile_view_unreadable'); };
+  const card = (value, essential = false) => {
+    const node = directoryNode(value);
+    if (!node.displayName) fail();
+    if (essential) return Object.fromEntries(['kind', 'handle', 'canonicalAddress', 'host', 'displayName'].map((k) => [k, node[k]]));
+    for (const key of ['avatarUrl', 'update']) if (value[key] !== null && (typeof value[key] !== 'string' || !value[key].isWellFormed())) fail();
+    return { ...node, avatarUrl: value.avatarUrl, update: value.update };
+  };
+  const part = (value, parse) => {
+    record(value, 'profile_view_unreadable');
+    if (value.status === 'unavailable') return { status: 'unavailable' };
+    if (value.status !== 'available') fail();
+    return { status: 'available', value: parse(value.value) };
+  };
+  const note = (value) => {
+    record(value, 'profile_view_unreadable');
+    if (['absent', 'unavailable'].includes(value.status)) return { status: value.status };
+    if (value.status !== 'present' || typeof value.text !== 'string' || !value.text.isWellFormed()) fail();
+    return { status: 'present', text: value.text };
+  };
+  record(raw, 'profile_view_unreadable'); record(raw.subject, 'profile_view_unreadable'); record(raw.private_notes, 'profile_view_unreadable');
+  if (raw.subject.kind === 'node') return { subject: { kind: 'node', card: card(raw.subject.card) },
+    affiliation: part(raw.affiliation, (v) => {
+      record(v, 'profile_view_unreadable');
+      if (v.kind === 'agent') return { kind: 'agent', operator: v.operator === null ? null : card(v.operator) };
+      if (v.kind !== 'user' || !Array.isArray(v.operating)) fail();
+      return { kind: 'user', operating: v.operating.map((row) => card(row)) };
+    }),
+    relationship: part(raw.relationship, (v) => {
+      record(v, 'profile_view_unreadable');
+      if (!['none', 'outgoing-pending', 'incoming-pending', 'connected'].includes(v.relationship) || typeof v.canDirectSend !== 'boolean') fail();
+      text(v.perspectiveId, 'profile_view_unreadable');
+      let pending = null;
+      if (v.pendingRequest !== null) {
+        record(v.pendingRequest, 'profile_view_unreadable'); text(v.pendingRequest.id, 'profile_view_unreadable');
+        if (!['awaiting-your-decision', 'awaiting-counterparty', 'accepted', 'ignored', 'withdrawn'].includes(v.pendingRequest.status)) fail();
+        pending = { status: v.pendingRequest.status };
+      }
+      return { relationship: v.relationship, canDirectSend: v.canDirectSend, pendingRequest: pending };
+    }), private_notes: { node: note(raw.private_notes.node) } };
+  if (raw.subject.kind !== 'session') fail();
+  const subject = { kind: 'session', participant_ref: text(raw.subject.participant_ref, 'profile_view_unreadable') };
+  for (const key of ['name', 'host_label']) if (raw.subject[key] !== undefined) subject[key] = text(raw.subject[key], 'profile_view_unreadable');
+  return { subject, parent_node: part(raw.parent_node, (v) => {
+    record(v, 'profile_view_unreadable');
+    return { identity: card(v.identity, true), operator: part(v.operator, (value) => value === null ? null : card(value, true)) };
+  }), private_notes: { session: note(raw.private_notes.session), node: note(raw.private_notes.node) } };
 }
 
 export function managementNode(value, { requireHandle = true } = {}) {

@@ -212,7 +212,11 @@ export class Directory {
     } else {
       this.change((s) => { s.sessions = null; });
       page = await this.sessionQuery(args, held, signal);
-      if (page.outcome !== undefined) return { to: '@' + args.to, outcome: page.outcome, sessions: page.sessions.map(targetView) };
+      if (page.outcome !== undefined) {
+        this.change((s) => { s.sessions = { epoch: this.epoch, to: args.to, query: page.query ?? {}, source: page.source ?? {}, traversal: { complete: true },
+          registration: this.registration(held), cursors: [], seen: page.sessions.map((r) => r.target_ref), rows: page.sessions }; });
+        return { to: '@' + args.to, outcome: page.outcome, sessions: page.sessions.map(targetView) };
+      }
     }
     const t = page.traversal;
     if (!object(t) || !ref(t.traversal_ref) || !Number.isSafeInteger(t.page) || t.page !== (original?.traversal.page ?? 0) + 1 || t.page_bound !== 12 || t.entry_count !== page.sessions.length || t.choice_count !== page.sessions.length || typeof t.complete !== 'boolean' || t.complete === own(t, 'continuation') ||
@@ -220,7 +224,7 @@ export class Directory {
     const cursors = original?.cursors ?? [], seen = original?.seen ?? [];
     if ((!t.complete && (!ref(t.continuation) || cursors.includes(t.continuation))) || page.sessions.some((r) => seen.includes(r.target_ref))) throw fault('session_cursor_cycle');
     this.change((s) => { s.sessions = { epoch: this.epoch, to: args.to, query: page.query ?? original.query, source: page.source ?? original.source, traversal: t,
-      registration: this.registration(held), cursors: [...cursors, ...(!t.complete ? [t.continuation] : [])], seen: [...seen, ...page.sessions.map((r) => r.target_ref)] }; });
+      registration: this.registration(held), cursors: [...cursors, ...(!t.complete ? [t.continuation] : [])], seen: [...seen, ...page.sessions.map((r) => r.target_ref)], rows: [...(original?.rows ?? []), ...page.sessions] }; });
     return { to: '@' + args.to, sessions: page.sessions.map(targetView), more: !t.complete };
   }
 }
