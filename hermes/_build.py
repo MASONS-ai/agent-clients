@@ -1,5 +1,5 @@
 # Generated artifact identity; not selected by runtime configuration.
-VERSION = "0.1.14"
+VERSION = "0.1.17"
 CHANNEL = "production"
 PLATFORM = "masons"
 LABEL = "MASONS"

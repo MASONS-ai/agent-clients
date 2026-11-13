@@ -22,6 +22,24 @@ class Names:
     def __init__(self, client):
         self.client, self.state, self.host = client, client.state, client.host
 
+    def observe(self, held, outcome):
+        self.host.profile()
+        with self.state.transaction():
+            self.client.check_credential(held["credential"])
+            live = self.state.session(held["root"])
+            if (not live or (live["nonce"], live["credential"]) != (held["nonce"], held["credential"])
+                    or self.state.get("ended/" + held["root"])):
+                raise Refusal("native_name_scope_changed")
+            self.state.put("native_name_status/" + held["root"], {**outcome, "observed_at": time.time(),
+                "credential": held["credential"], "nonce": held["nonce"]})
+
+    def outcome(self, held):
+        value = self.state.get("native_name_status/" + held["root"])
+        if (not value or (value.get("credential"), value.get("nonce")) != (held["credential"], held["nonce"])
+                or type(value.get("observed_at")) not in {int, float}):
+            return None
+        return {key: value[key] for key in ("status", "reason", "name", "observed_at") if key in value}
+
     def snapshot(self, held):
         from hermes_state import SessionDB
         self.host.profile()
@@ -102,24 +120,42 @@ class Names:
             os.close(fd)
 
     @staticmethod
-    def service_applied(marker, snapshot):
-        return any(isinstance(marker.get(key), dict) and marker[key].get("digest") == snapshot["digest"]
-                   for key in ("applying", "applied"))
+    def origin(marker, snapshot):
+        for key in ("applying", "applied"):
+            entry = marker.get(key)
+            if isinstance(entry, dict) and entry.get("digest") == snapshot["digest"]:
+                return entry.get("origin", "native")
+        return "native"
+
+    def service_applied(self, marker, snapshot):
+        return self.origin(marker, snapshot) == self.client.build.CHANNEL
+
+    @staticmethod
+    def complete(marker, attempt, status="applied"):
+        if attempt and attempt.get("action"):
+            marker.setdefault("completed", {})[attempt["channel"]] = {
+                "action": attempt["action"], "status": status}
 
     def registration(self, held):
         snapshot = None
         try:
             snapshot = self.snapshot(held)
+            scope = snapshot["scope"]
             with self.marker(snapshot) as (marker, _):
+                snapshot = self.snapshot(held)
+                if snapshot["scope"] != scope:
+                    raise Refusal("native_name_scope_changed")
                 return snapshot["writable"], snapshot["base"] if not self.service_applied(marker, snapshot) else None
         except (ImportError, Refusal) as error:
-            self.state.put("native_name_status/" + held["root"], {"status": "unqualified", "reason": getattr(error, "code", "native_name_interfaces_unavailable")})
-            if getattr(error, "code", None) == "native_name_busy" and snapshot:
+            busy = getattr(error, "code", None) == "native_name_busy"
+            self.observe(held, {"status": "pending" if busy else "unqualified",
+                                "reason": getattr(error, "code", "native_name_interfaces_unavailable")})
+            if busy and snapshot:
                 return snapshot["writable"], None
             return (False if isinstance(error, ImportError) else None), None
         except Exception as error:
             self.client.problem(error)
-            self.state.put("native_name_status/" + held["root"], {"status": "pending", "reason": "native_name_unconfirmed"})
+            self.observe(held, {"status": "pending", "reason": "native_name_unconfirmed"})
             return None, None
 
     def saved(self, held, snapshot):
@@ -163,9 +199,26 @@ class Names:
     async def work(self, api, held):
         self.client.bound(held)
         snapshot = self.snapshot(held)
+        scope = snapshot["scope"]
         with self.marker(snapshot) as (marker, save):
+            snapshot = self.snapshot(held)
+            if snapshot["scope"] != scope:
+                raise Refusal("native_name_scope_changed")
+            applying = marker.get("applying")
+            if applying and applying["digest"] == snapshot["digest"]:
+                self.complete(marker, applying)
+                marker["applied"] = marker.pop("applying")
+                save()
             value = self.saved(held, snapshot)
+            completed = record(marker.get("completed", {})).get(self.client.build.CHANNEL)
+            cues = [row for row in self.state.rows("SELECT * FROM controls WHERE root=? AND nonce=? AND credential=? AND applied=0",
+                                                  (held["root"], held["nonce"], held["credential"]))
+                    if json.loads(row["body"])["type"] == "session_name_changed"]
             base = snapshot["base"]
+            if base and value.get("refused") and value["refused"] != snapshot["digest"]:
+                value.pop("refused")
+                value.pop("reported", None)
+                self.retain(held, value)
             if base and not self.service_applied(marker, snapshot) and value.get("reported") != digest(base):
                 if value.get("attempted") == digest(base) and time.time() < value.get("after", 0):
                     return
@@ -179,20 +232,42 @@ class Names:
                     raise Refusal("native_name_report_unconfirmed")
                 if not ack["accepted"] and ack.get("reason") != "invalid":
                     raise Refusal("native_name_report_" + str(ack.get("reason", "unconfirmed")))
+                if not ack["accepted"] and not cues and not value.get("initial"):
+                    if value.get("pending"):
+                        self.complete(marker, {"action": value.get("action"), "channel": self.client.build.CHANNEL}, "superseded")
+                        save()
+                    value.update(reported=digest(base), refused=digest(base), pending=None)
+                    self.retain(held, value)
+                    self.observe(held, {"status": "invalid", "name": base})
+                    return
+                value.pop("refused", None)
                 value.update(reported=digest(base), initial=True)
                 self.retain(held, value)
                 if self.snapshot(held) != snapshot:
                     raise Refusal("native_name_changed")
-            cues = [row for row in self.state.rows("SELECT * FROM controls WHERE root=? AND nonce=? AND credential=? AND applied=0",
-                                                  (held["root"], held["nonce"], held["credential"]))
-                    if json.loads(row["body"])["type"] == "session_name_changed"]
-            if cues or value.get("initial"):
+            if base and value.get("refused") == snapshot["digest"] and not cues and not value.get("initial"):
+                self.observe(held, {"status": "invalid", "name": base})
+                return
+            status = self.state.get("native_name_status/" + held["root"])
+            recovering = ((not self.outcome(held) or status.get("status") not in {"applied", "superseded", "invalid"}) and not cues
+                          and not value.get("initial") and not value.get("pending"))
+            if cues or value.get("initial") or recovering:
                 row = await api.owned(held)
                 self.client.bound(held)
                 name = text(record(row.get("session_naming")).get("name"))
                 if self.snapshot(held) != snapshot:
                     raise Refusal("native_name_changed")
-                value.update(initial=False, pending=name)
+                if (recovering and value.get("reported") == digest(name)
+                        and (snapshot["digest"] == digest(name) or self.service_applied(marker, snapshot))):
+                    if not snapshot["writable"]:
+                        raise Refusal("native_name_setter_unavailable")
+                    # Reconcile this channel's completion without replaying it over another channel.
+                    result = completed["status"] if completed and completed["action"] == value.get("action") else "applied"
+                    self.observe(held, {"status": result, "name": name})
+                    return
+                value.pop("refused", None)
+                value.update(initial=False, pending=name, action=uuid.uuid4().hex,
+                             before=digest(marker.get("applied")))
                 with self.state.transaction():
                     self.retain(held, value)
                     for cue in cues:
@@ -201,10 +276,23 @@ class Names:
             name = value.get("pending")
             if not name:
                 return
+            if not value.get("action") or "before" not in value:
+                raise Refusal("native_name_action_unqualified")
+            if not (completed and completed["action"] == value["action"]) and value["before"] != digest(marker.get("applied")):
+                self.complete(marker, {"action": value["action"], "channel": self.client.build.CHANNEL}, "superseded")
+                save()
+                completed = marker["completed"][self.client.build.CHANNEL]
+            if completed and completed["action"] == value.get("action"):
+                value.update(pending=None, reported=digest(name))
+                self.retain(held, value)
+                self.observe(held, {"status": completed["status"], "name": name})
+                return
             if not snapshot["writable"]:
                 raise Refusal("native_name_setter_unavailable")
+            attempt = {"digest": digest(name), "channel": self.client.build.CHANNEL, "action": value["action"],
+                       "origin": self.client.build.CHANNEL if snapshot["digest"] != digest(name) else self.origin(marker, snapshot)}
             if snapshot["digest"] != digest(name):
-                marker["applying"] = {"digest": digest(name), "channel": self.client.build.CHANNEL}
+                marker["applying"] = attempt
                 save()
                 try:
                     self.write(held, snapshot, name)
@@ -214,11 +302,12 @@ class Names:
                 current = self.snapshot(held)
                 if current["scope"] != snapshot["scope"] or current["digest"] != digest(name):
                     raise Refusal("native_name_readback_unconfirmed")
-            marker["applied"] = {"digest": digest(name), "channel": self.client.build.CHANNEL}
+            self.complete(marker, attempt)
+            marker["applied"] = attempt
             marker.pop("applying", None); save()
             value.update(pending=None, reported=digest(name))
             self.retain(held, value)
-            self.state.put("native_name_status/" + held["root"], {"status": "applied", "name": name})
+            self.observe(held, {"status": "applied", "name": name})
 
     async def maintain(self, api, held):
         try:
@@ -226,7 +315,7 @@ class Names:
         except ImportError:
             return
         except Refusal as error:
-            self.state.put("native_name_status/" + held["root"], {"status": "pending", "reason": error.code})
+            self.observe(held, {"status": "pending", "reason": error.code})
         except Exception as error:
             self.client.problem(error)
-            self.state.put("native_name_status/" + held["root"], {"status": "pending", "reason": "native_name_unconfirmed"})
+            self.observe(held, {"status": "pending", "reason": "native_name_unconfirmed"})

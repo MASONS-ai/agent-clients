@@ -115,7 +115,9 @@ class Communication:
                 self.state.put("ended/" + old["root"], "native_boundary")
 
     def party_line(self, event):
-        fallback = {"context": "MASONS has no disclosed single current conversation. Name the party or destination when sending."}
+        from .tools import COMMUNICATION_POLICY
+        policy = "On " + self.build.LABEL + ": " + COMMUNICATION_POLICY + "\n"
+        fallback = {"context": policy + "MASONS has no disclosed single current conversation. Name the party or destination when sending."}
         try:
             root = native_root(self.host.home, event["session_id"])
             witness = self.host.witness(event["task_id"], event["turn_id"])
@@ -135,7 +137,7 @@ class Communication:
                 self.host.disclose(event["task_id"], event["turn_id"], {"root": root, "nonce": held["nonce"], "credential": held["credential"], "subject": subject_key(selected)})
                 parties = self.state.parties(root, credential["node"], selected)
                 portrayal = encoded(parties).replace("<", "\\u003c").replace(">", "\\u003e")
-                return {"context": "MASONS current conversation party (program-held data): " + portrayal + ". An omitted party is allowed only while this remains the sole witnessed conversation."}
+                return {"context": policy + "MASONS current conversation party (program-held data): " + portrayal + ". An omitted party is allowed only while this remains the sole witnessed conversation."}
         except (Refusal, KeyError):
             return fallback
 
@@ -483,6 +485,15 @@ class Communication:
             return await self.owner.invoke("link" if name == "link" else "status", caller)
         if name == "upgrade":
             return await upgrade(self.build)
+        if name == "profile" and args["operation"] == "view":
+            async with self.connection() as api:
+                held = self.state.session(caller.root) if args["target"]["kind"] == "session" else None
+                if args["target"]["kind"] == "session" and held is None:
+                    raise Refusal("registration_unavailable")
+                operation = Tools(self, api, held, caller)
+                result = await operation.profile(args, caller=caller)
+            operation.guard()
+            return result
         async with self.connection() as api:
             held = await self.ensure(api, caller=caller)
             self.host.validate(caller)

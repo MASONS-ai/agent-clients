@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from datetime import datetime, timezone
 import hashlib
 import json
 import shlex
@@ -15,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .portrayal import fingerprint
+from .host import Host
 from .services import record, text
 from .state import Refusal, encoded
 
@@ -223,11 +225,21 @@ class Owner:
             proposal = self.prepare(raw)
             if proposal["action"] == "status":
                 try:
-                    root = self.host.owner_session(event)[0]
+                    session = self.host.owner_session(event)
+                    root = session[0]
                     unavailable = None
                 except Refusal as error:
-                    root, unavailable = None, error.code
-                return self.run(self.status(root, unavailable=unavailable))
+                    session, root, unavailable = None, None, error.code
+                def authorize():
+                    try:
+                        live = self.host.owner_session(event)
+                    except Refusal:
+                        live = None
+                    if self.host.owner_context(event) != native or live != session:
+                        raise Refusal("native_owner_scope_changed")
+                result = self.run(self.status(root, unavailable=unavailable, authorize=authorize))
+                authorize()
+                return result
             reclaim = None
             if proposal["action"] == "link":
                 try:
@@ -251,8 +263,8 @@ class Owner:
         finally:
             self.commands.release()
 
-    async def status(self, root=None, *, unavailable=None, caller=None):
-        return await status(self.client, root, unavailable=unavailable, caller=caller)
+    async def status(self, root=None, *, unavailable=None, caller=None, authorize=None):
+        return await status(self.client, root, unavailable=unavailable, caller=caller, authorize=authorize)
 
     async def change(self, action, expected, previous, candidate_key, reclaim, *, authorize=None):
         async with self.operations:
@@ -444,10 +456,35 @@ class Owner:
             self.state.put("candidate", None)
 
 
-async def status(client, root=None, *, unavailable=None, caller=None):
+async def status(client, root=None, *, unavailable=None, caller=None, authorize=None):
     credential = client.state.get("credential")
+    held = client.state.session(root) if root else None
+    def current():
+        client.host.profile()
+        if client.closed:
+            raise Refusal("client_stopped")
+        if client.state.get("credential") != credential:
+            raise Refusal("credential_changed")
+        if authorize:
+            authorize()
+        if caller:
+            client.host.validate(caller)
+        if root and client.state.get("ended/" + root):
+            raise Refusal("native_session_ended")
+        live = client.state.session(root) if root else None
+        if ([(live or {}).get(k) for k in ("nonce", "credential", "state", "route", "logical")]
+                != [(held or {}).get(k) for k in ("nonce", "credential", "state", "route", "logical")]):
+            raise Refusal("registration_changed")
+        if held and held["state"] == "active":
+            if caller: client.invocation(caller, held)
+            else: client.bound(held)
+    current()
+    installation = Host.installation(client.ctx, client.build)
+    receiver = {"local_state": held["state"] if held else "not_registered", "verification": "not_checked"}
     result = {"Link": {"state": "link_lost" if credential and client.credential_ended else "linked" if credential else "setup_pending" if client.state.get("candidate") else "not_linked"},
-              "Identity": None, "Presence": None, "Client": None, "loaded_plugin_version": client.build.VERSION}
+              "Identity": None, "Presence": None, "Client": None, "loaded_plugin_version": client.build.VERSION,
+              "installation": installation, "activation": Host.activation(installation, client.build), "unavailable": {},
+              "diagnostics": {"channel": client.build.CHANNEL, "network": client.build.WEB, "receiver": receiver}}
     if credential:
         async with client.connection() as api:
             try:
@@ -457,35 +494,47 @@ async def status(client, root=None, *, unavailable=None, caller=None):
                 result.setdefault("unavailable", {})["Identity"] = getattr(error, "code", "services_unavailable")
                 if getattr(error, "status", None) in {401, 403}:
                     result["Link"]["state"] = "link_lost"
-            held = client.state.session(root) if root else None
             if held and held["state"] == "active":
-                def current():
-                    if caller:
-                        client.invocation(caller, held)
-                    else:
-                        client.bound(held)
                 try:
                     current()
                     row = await api.owned(held)
                     current()
-                    result["Presence"], result["Client"] = row.get("presence"), row.get("client")
+                    receiver.update(verification="verified", checked_at=datetime.now(timezone.utc).isoformat())
+                    if row.get("presence") in {"online", "offline", "none"}:
+                        result["Presence"] = {"state": row["presence"], "contracts": [row[k] for k in
+                            ("natural_boundary_presentation_contract_id", "node_recipient_admission_contract_id")
+                            if isinstance(row.get(k), str) and row[k]]}
+                    else:
+                        result["unavailable"]["Presence"] = "not_recorded"
+                    if isinstance(row.get("client"), dict) and row["client"]:
+                        result["Client"] = row["client"]
+                    else:
+                        result["unavailable"]["Client"] = "not_recorded"
                 except Exception as error:
                     client.problem(error)
+                    receiver.update(verification="unavailable", checked_at=datetime.now(timezone.utc).isoformat())
                     result.setdefault("unavailable", {}).update(Presence=getattr(error, "code", "services_unavailable"), Client=getattr(error, "code", "services_unavailable"))
                 try:
                     current()
                     identity = await api.session_identity(held)
                     current()
                     result["Identity"] = {**(result["Identity"] or {}), **identity}
-                    naming = client.state.get("native_name_status/" + held["root"])
-                    if naming: result["SessionName"] = naming
                 except Exception as error:
                     client.problem(error)
                     result.setdefault("unavailable", {})["SessionIdentity"] = getattr(error, "code", "services_unavailable")
+                current()
+                naming = client.names.outcome(held)
+                if naming: result["SessionName"] = naming
+                else: result["unavailable"]["SessionName"] = "native_name_observation_unqualified"
             elif unavailable:
                 result.setdefault("unavailable", {}).update(Presence=unavailable, Client=unavailable)
             else:
                 result["Link"]["receiver"] = "not_registered"
+                result["unavailable"].update(Presence="registration_unavailable", Client="registration_unavailable")
+    else:
+        result["unavailable"].update(Identity="link_required", Presence="link_required", Client="link_required")
     result["Link"].update(set_aside=len(client.state.rows("SELECT id FROM inbox WHERE set_aside=1 AND presented=0")),
                            unconfirmed_registration_cleanup=len(client.state.rows("SELECT key FROM meta WHERE key LIKE 'unconfirmed_retirement/%'")))
+    current()
+    result["diagnostics"]["reported_at"] = datetime.now(timezone.utc).isoformat()
     return result

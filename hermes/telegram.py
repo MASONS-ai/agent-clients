@@ -65,10 +65,12 @@ def wire(ctx, application, adapter, current, build):
             proposal = client.owner.prepare(raw)
             native = native_session(client, route)
             if proposal["action"] == "status":
+                def authorize():
+                    if actor(update) != (client, authority, route) or native_session(client, route) != native:
+                        raise Refusal("owner_context_changed")
                 result = await client.owner.status(native[0] if native else None,
-                    unavailable=None if native else "native_identity_unresolved")
-                if actor(update) != (client, authority, route):
-                    raise Refusal("owner_context_changed")
+                    unavailable=None if native else "native_identity_unresolved", authorize=authorize)
+                authorize()
                 await update.effective_message.reply_text(encoded(result))
                 return
             nonce = secrets.token_urlsafe(18)

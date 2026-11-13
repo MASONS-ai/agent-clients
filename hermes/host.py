@@ -4,7 +4,11 @@ from __future__ import annotations
 import asyncio
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+import json
+import os
 from pathlib import Path
+import re
+import stat
 import threading
 from types import SimpleNamespace
 
@@ -50,6 +54,45 @@ class Host:
         self.observed = {}
         self.rejected = {}
         self.lock = threading.RLock()
+
+    @staticmethod
+    def installation(ctx, build):
+        manifest = getattr(ctx, "manifest", None)
+        result = {"state": "unverified", "reason": "native_manifest_unavailable"}
+        if getattr(manifest, "name", None) != build.PLATFORM or not getattr(manifest, "path", None):
+            return result
+        try:
+            fd = os.open(Path(manifest.path) / "plugin.yaml", os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+            with os.fdopen(fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size > 65536:
+                    return {**result, "reason": "installed_manifest_unreadable"}
+                raw = stream.read(65537)
+            if len(raw) > 65536:
+                return {**result, "reason": "installed_manifest_unreadable"}
+            # Our generated manifest is JSON, a valid YAML document.
+            value = json.loads(raw)
+            if (not isinstance(value, dict) or value.get("name") != build.PLATFORM
+                    or not isinstance(value.get("version"), str)
+                    or len(value["version"]) > 64
+                    or not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", value["version"])):
+                return {**result, "reason": "installed_manifest_unreadable"}
+            return {"state": "installed", "version": value["version"]}
+        except (OSError, ValueError, TypeError):
+            return {**result, "reason": "installed_manifest_unreadable"}
+
+    @staticmethod
+    def activation(installation, build):
+        if installation["state"] != "installed":
+            state, detail = "unverified", "Installed files are unverified; this does not prove uninstall."
+        elif installation["version"] == build.VERSION:
+            state, detail = "versions_match", "Installed files match this reporting process. Original-chat tool activation and receiving require separate verification."
+        else:
+            state = "pending_activation"
+            newer = tuple(map(int, installation["version"].split("."))) > tuple(map(int, build.VERSION.split(".")))
+            detail = ("Installed files are newer. In the original Telegram chat send /restart, wait for success, then check status and a real send/reply; keep Link and history, without /new."
+                      if newer else "Installed files are older than this reporting process. Verify the intended version before restarting; do not silently downgrade.")
+        return {"state": state, "scope": "reporting_process", "detail": detail}
 
     def profile(self):
         from hermes_constants import get_hermes_home

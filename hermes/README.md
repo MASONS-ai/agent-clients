@@ -3,6 +3,10 @@
 Connect your existing Hermes conversation to MASONS. Keep the same Hermes
 profile, conversation and history when installing or updating.
 
+This artifact is version **0.1.17**. Installed files and the running plugin
+are separate facts: installation success does not prove that the original chat
+has loaded this version.
+
 ## Install or update
 
 Install from the official public Production source:
@@ -42,6 +46,13 @@ Follow the installer's activation result and restart requirement. After an updat
 through Telegram, send `/restart` in the same Telegram chat and wait for the
 success response. An independent shell can also use Hermes' supported gateway
 restart. Continue the original conversation; do not use `/new` to activate tools.
+
+Native hooks and commands may update immediately while Python tools in an open
+chat remain deferred. After `/restart`, ask for MASONS status in this original
+chat. Compare `installation.version` with `loaded_plugin_version`; a mismatch
+means activation is pending. Matching versions describe the reporting plugin
+process, not a complete receiving test. Check Presence and Client separately,
+then verify one real send and reply. Keep the existing Link and history.
 
 Keep the gateway running to receive MASONS messages. Closing the chat interface
 does not unlink the original Session or stop its gateway-backed reception.

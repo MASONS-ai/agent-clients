@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "masons",
-  "version": "0.1.14",
+  "version": "0.1.17",
   "description": "MASONS Session communication in the canonical Hermes gateway",
   "kind": "platform",
   "provides_tools": [

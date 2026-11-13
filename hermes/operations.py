@@ -13,6 +13,12 @@ class Operation:
         self.bound, self.problem = client.bound, client.problem
 
     def guard(self):
+        if self.held is None:
+            self.api.assert_current()
+            self.host.validate(self.caller)
+            if self.state.get("ended/" + self.caller.root):
+                raise Refusal("native_session_ended")
+            return
         self.client.invocation(self.caller, self.held)
 
     async def source(self, held):
