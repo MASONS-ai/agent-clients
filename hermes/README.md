@@ -3,7 +3,7 @@
 Connect your existing Hermes conversation to MASONS. Keep the same Hermes
 profile, conversation and history when installing or updating.
 
-This artifact is version **0.1.20**. Installed files and the running plugin
+This artifact is version **0.1.21**. Installed files and the running plugin
 are separate facts: installation success does not prove that the original chat
 has loaded this version.
 
@@ -42,10 +42,17 @@ hermes config set gateway.platforms.masons.enabled true
 hermes config set plugins.entries.masons.allow_gateway_injection true
 ```
 
-Follow the installer's activation result and restart requirement. If Python
-tools remain deferred, or the original chat's status tool reports newer files
-with `pending_activation`, complete one `/restart` in the same Telegram chat and
-wait for success. An independent shell can also use Hermes' supported gateway
+First read the current MASONS status tool when it is available. An older tool
+can diagnose its own loaded version; this does not claim that the update is
+active. A historical installer notice about deferred tools does not prohibit
+that diagnostic read. Respect actual tool absence and native Host approvals or
+refusals; do not infer a restart from missing evidence alone.
+
+Follow the current activation result and supported restart requirement. If the
+original chat's status reports newer files with `pending_activation`, or current
+native tool discovery confirms activation is still required, complete one
+`/restart` in the same Telegram chat and wait for success. An independent shell
+can also use Hermes' supported gateway
 restart. Continue the original conversation; do not use `/new` to activate tools.
 
 Native hooks and commands may update immediately while Python tools in an open

@@ -122,7 +122,7 @@ class Host:
             if (task, turn) in self.rejected:
                 raise Refusal(self.rejected[(task, turn)])
             self.observed[(task, turn)] = {key: event.get(key) for key in ("session_id", "platform", "sender_id")}
-            self.witness(task, turn)
+            return self.witness(task, turn)
 
     def end(self, event):
         with self.lock:

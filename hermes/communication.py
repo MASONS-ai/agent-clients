@@ -117,8 +117,8 @@ class Communication:
                 self.state.put("ended/" + old["root"], "native_boundary")
 
     def party_line(self, event):
-        from .tools import COMMUNICATION_POLICY
-        policy = "On " + self.build.LABEL + ": " + COMMUNICATION_POLICY + "\n"
+        from .tools import COMMUNICATION_POLICY, READINESS_POLICY
+        policy = "On " + self.build.LABEL + ": " + COMMUNICATION_POLICY + " " + READINESS_POLICY + "\n"
         fallback = {"context": policy + "MASONS has no disclosed single current conversation. Name the party or destination when sending."}
         try:
             root = native_root(self.host.home, event["session_id"])

@@ -109,11 +109,12 @@ def register(ctx):
             try:
                 client = current(event if name == "begin" else None)
                 if name == "begin":
-                    client.host.begin(event)
+                    witness = client.host.begin(event)
+                    if witness is None:
+                        return
                     if client.state.get("credential"):
-                        witness = client.host.witness(event.get("task_id"), event.get("turn_id"))
                         client.schedule(client.discover({**witness, "physical": event["session_id"]}))
-                        return client.party_line(event)
+                    return client.party_line(event)
                 elif name == "end":
                     client.typing.finish(event, turn=True)
                     client.host.end(event)
