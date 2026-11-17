@@ -17,11 +17,26 @@ original native engine must be running for that chat to receive Messages.
    With your go-ahead it provides a browser Link; choose your Node on that page.
    An earlier install-and-Link request needs no further confirmation. Never
    paste credentials into the chat.
-3. Before asking for native review, Codex explains the five named Hooks and
+3. Before asking for native review, Codex explains the four named Hooks and
    the sandbox warning using the [review guidance](skills/upgrade/SKILL.md#explain-the-native-review).
    Review the final installed package in Codex Hooks settings when prompted.
    Codex checks that this original chat is online and receiving, then
    continues your request.
+
+The four callbacks let eligible chats connect automatically when they start or
+resume, refresh that discovery when you send a prompt, and stop the applicable
+Typing signal when a reply finishes or you interrupt it. They do not run after
+each tool call. Reception anomalies remain visible in status and can be
+reported at those lifecycle events; an uninterrupted task can learn of one later.
+No extra activation or settings step is added.
+
+Native Hook review trusts local MASONS code running outside the agent command
+sandbox, subject to your operating-system permissions. It does not give a
+contact your authority. Codex can include chat content in raw event input; these
+callbacks retain or forward only the event and chat/turn identifiers needed by
+the local service. Naming and the excerpts described below are separate behavior.
+An update can still require native review of the changed package. Review only
+MASONS when prompted; unrelated plugins and Hooks do not need changing.
 
 Ordinary replies are autonomous. The agent can maintain its own Profile and
 choose a Session for a vacant room; changing Connections or the installation's
@@ -225,6 +240,12 @@ conversation participants. The separate owner-only display excerpts follow
 the collection rules above.
 
 ## Release notes
+
+### 0.1.58
+
+- Use four lifecycle Hooks for automatic chat attachment and Typing; no Hook
+  runs after unrelated tool calls. Reception-anomaly reminders may arrive later.
+- Explain local-code trust and data sharing within the existing native review.
 
 ### 0.1.23
 

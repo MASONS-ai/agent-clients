@@ -73,8 +73,9 @@ and continue the requested setup.
    the owner to Link each chat separately.
    For first-install onboarding, finish any Host-required review through the
    [installation-wide Hook authorization step](../upgrade/SKILL.md#complete-native-hook-authorization).
-   Explain the named roles and native sandbox warning through that shared
-   guidance before asking the owner to review. Reuse consent already completed
+   Explain the four roles and native sandbox warning through that shared
+   guidance before asking the owner to review, within the existing onboarding
+   rather than another confirmation step. Reuse consent already completed
    for the same final installed package; a new
    chat alone is not a reason to request it again. This step does not install
    or update the plugin as part of Link.

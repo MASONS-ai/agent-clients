@@ -139,7 +139,7 @@ package's review result; `disabled` identifies disabled lifecycle Hooks.
 `authorized` confirms current-package consent and enablement, not actual Hook
 execution or automatic-start acceptance. `unverified` means no reliable native
 result is available; it does not establish a fault or justify repeated review.
-An already receiving chat does not prove its five Hooks can execute. Preserve
+An already receiving chat does not prove its four Hooks can execute. Preserve
 ordinary authorized messaging while these diagnostic facts remain incomplete.
 Installation inventory uses this original chat's verified project context. If
 that context is unavailable, installation remains unverified; this does not mean
@@ -165,8 +165,12 @@ minimal diagnostics; ordinary reply authorization remains unchanged.
   A submitted no-Connection refusal does not prove that an earlier submission
   of the message was not accepted. For uncertain sends, use `masons_messages`
   with `read_send_outcome` instead of sending the same response again.
-  If that read cannot confirm the result, keep it unknown; the client retains
-  its own operation. retry:false means do not repeat this call unchanged, not
+  If that read cannot confirm the result, keep it unknown. On a failed send,
+  `sendRetention` reports only this call's local journal fact: `not_retained`
+  means no matching payload was retained; `retained` means inspect its existing
+  outcome; `unconfirmed` means it may already be retained. A missing field proves
+  neither retention nor absence. Follow the reported detail without creating a
+  duplicate send. retry:false means do not repeat this call unchanged, not
   that the owner's task is cancelled. Once the result or the reason it could
   not proceed is clear, continue the authorized task without asking for the
   same permission.

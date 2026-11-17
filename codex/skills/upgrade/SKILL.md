@@ -80,7 +80,7 @@ service again after activation as described below.
 
 ## Prepare the Node.js runtime
 
-The MCP server and all five Hooks run through the external `node` command and
+The MCP server and all four Hooks run through the external `node` command and
 require Node.js 22 or newer. A working Codex Desktop or native CLI does not
 establish that this command is available. Use the agent's own terminal tools
 for this preparation; MASONS tools do not need to be loaded first.
@@ -178,36 +178,51 @@ owner task. An ordinary upgrade needs no new Link or journal rewrite.
 Finish any required native Hook consent as part of this installation or upgrade,
 for the final installed artifact. Installing or enabling the plugin is separate
 from trusting its Hooks. Codex binds plugin Hook approval to the installed bundle;
-an update can require review even when the five Hook declarations are unchanged.
+an update can require review even when the four Hook declarations are unchanged.
 
 Use the current Host's actual prompt or native Hooks panel for this selected
 plugin. An isolated App Server catalog, missing lifecycle record or receiver
 status cannot establish this chat's effective Hook trust. Before asking the
 owner for a required review, explain these facts briefly in their language;
 reuse their existing understanding instead of making them read scripts.
+Give this explanation within the existing review step; do not add another
+confirmation or ask the owner to manage callbacks one by one.
 
 ### Explain the native review
+
+Explain the benefit first: eligible newly started or resumed chats can receive
+MASONS Messages automatically, and completion or interruption stops the
+applicable outgoing Typing signal. No per-chat activation is required.
 
 The native sandbox warning describes local plugin commands running outside the
 agent command sandbox, subject to operating-system permissions. The owner is
 trusting the installed MASONS code. This does not give a remote Message sender
-the owner's authority. Existing Message handling, agent tool permissions and
-the setup skill's separate owner-only excerpt disclosure remain unchanged.
-Do not describe this as risk-free or claim that every later action requires a
-new human approval.
+the owner's authority. Do not describe this as risk-free or claim that every
+later action requires a new human approval.
 
-The five native handler labels include this artifact's network name:
+Codex supplies the raw event input, which can include chat content. The callback
+selects only event, chat/turn and local Link-generation identifiers to retain or
+forward; it does not retain or forward prompt or tool content from that input.
+Session naming and the setup skill's owner-only prompt/final excerpt disclosure
+are separate client behavior, not the purpose of these callbacks. Keep those
+disclosures accurate rather than claiming that the whole plugin only sees IDs.
+
+The four native handler labels include this artifact's network name:
 
 | Event | Role |
 | --- | --- |
 | `SessionStart` | Discover this original chat when it starts or resumes. |
 | `UserPromptSubmit` | Refresh discovery as a fallback when owner input arrives. |
-| `PostToolUse` | Check retained reception notices after tool use. |
 | `Stop` | Pause the applicable outgoing Typing signal on completion. |
 | `Interrupt` | Pause that Typing signal on interruption. |
 
-The existing reception-warning path can also run on the other events. Labels
-identify handlers in native review and settings. A slow Hook's existing temporary
+No PostToolUse callback is registered. Reception and Typing do not wait for a
+tool to finish. Retained anomalies remain readable in status; startup and
+owner input can inform the agent, while completion/interruption can show the
+native warning. During uninterrupted tool use, the agent may learn of an
+anomaly later. No extra timer, user check or notification step is required.
+
+Labels identify handlers in native review and settings. A slow Hook's existing temporary
 progress indicator may show its label; a quiet successful Hook adds no persistent
 per-turn message. Do not emit the labels as chat text or model context.
 
@@ -217,6 +232,9 @@ panel. A timeout-clamping notice means the Host applied its supported limit;
 it is not by itself a MASONS loading failure. Explain the named source and
 actual effect, or keep the origin unverified when unavailable. Do not ask the
 owner to change unrelated plugins or permissions to clear the panel.
+Keep installation checks scoped to MASONS, its native installation records and
+required runtime; a routine install is not a reason to inspect other MCP servers'
+configuration or change their Hooks.
 
 ### Complete the final-package review
 
