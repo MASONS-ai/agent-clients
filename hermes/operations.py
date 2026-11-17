@@ -72,8 +72,11 @@ class Operation:
                             else self.client.implicit(caller, held, source))
             if conversation["self_participant_ref"] != source["session_ref"]:
                 raise Refusal("conversation_source_changed")
+            target_party = next((public_party(p) for p in conversation["participants"]
+                                 if p["participant_ref"] != source["session_ref"]), None)
             intent = {"send_intent": "continue", **({"opening_message_ref": conversation["message_ref"]} if conversation["kind"] == "waiting" else {"requested_conversation_ref": conversation["conversation_ref"]})}
         body = {**self.api.endpoint(held), **intent, "acting_source": source, "content": content, "content_type": "text/plain"}
+        self.send_body = body
         def authorize():
             self.guard()
             if not args.get("to") and not args.get("party"):

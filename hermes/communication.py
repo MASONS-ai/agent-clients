@@ -9,6 +9,8 @@ import threading
 import time
 from urllib.parse import quote
 
+from aiohttp import ClientConnectionError
+
 from .gateway import Gateway
 from .naming import Names
 from .typing import Typing
@@ -314,7 +316,7 @@ class Communication:
                 raise Refusal("canonical_gateway_receiver_required")
             await asyncio.sleep(0.05)
 
-    async def ensure(self, api, *, caller=None, held=None):
+    async def ensure(self, api, *, caller=None, held=None, message_operation=False):
         if not self.resident:
             return await self.execution_binding(api, caller)
         if not self.registration_gate.acquire(blocking=False):
@@ -348,7 +350,14 @@ class Communication:
                 else:
                     if (self.state.get("ordinary/" + held["root"]) or {}).get("native"):
                         await self.qualify_saved(held)
-                    await self.owned(api, held)
+                    cached = record(self.state.get("source/" + held["nonce"]) or {}) if message_operation else {}
+                    if cached.get("credential") == held["credential"]:
+                        source = record(cached.get("source"))
+                        if source.get("kind") != "exact_session":
+                            raise Refusal("session_source_unconfirmed")
+                        text(source.get("session_ref"))
+                    else:
+                        await self.owned(api, held)
                     await self.source(api, held)
                     return held
             if held["request"]:
@@ -494,28 +503,65 @@ class Communication:
                 result = await operation.profile(args, caller=caller)
             operation.guard()
             return result
+        admission, failure = None, None
         async with self.connection() as api:
-            held = await self.ensure(api, caller=caller)
+            try:
+                held = await self.ensure(api, caller=caller,
+                    message_operation=name == "send" or name == "look" and args["at"] == "outcome")
+            except (TimeoutError, ClientConnectionError) as error:
+                self.problem(error, operation="registration check")
+                admission = {"status": "request_not_admitted", "admission_check": "registration",
+                        "error": "registration_check_timeout" if isinstance(error, TimeoutError) else "registration_check_connection_failed",
+                        "retry": False,
+                        "detail": "This invocation stopped in registration checks before its requested operation. Registration work may already have progressed. This does not determine the outcome of older retained sends; do not repeat an uncertain send."}
+            else:
+                self.host.validate(caller)
+                self.bound(held)
+                if name == "receive" or name == "look" and args["at"] == "message":
+                    if args and args != {"at": "message"}:
+                        raise Refusal("receive_has_no_target_arguments")
+                    message = self.state.next_message(caller.root, node=api.credential["node"])
+                    if message is None:
+                        self.tell_set_aside(held, api.credential["node"])
+                        return {"messages": [], "set_aside": len(self.state.rows("SELECT id FROM inbox WHERE root=? AND node=? AND set_aside=1 AND presented=0", (caller.root, api.credential["node"])))}
+                    frame = json.loads(message["frame"])
+                    if frame["subject"]["self_participant_ref"] != (await self.source(api, held))["session_ref"]:
+                        raise Refusal("message_source_changed")
+                    repeat = bool(self.state.rows("SELECT id FROM handoffs WHERE message=? LIMIT 1", (message["id"],)))
+                    pieces = pieces_for(frame, repeat=repeat)
+                    def authorize():
+                        self.invocation(caller, held)
+                    return self.state.handoff(message["id"], caller, pieces, authorize=authorize)
+                from .operations import Operation
+                operation = Operation(self, api, held, caller) if name == "read" else Tools(self, api, held, caller)
+                try:
+                    result = await getattr(operation, name)(args, caller=caller)
+                except Exception as error:
+                    if name != "send":
+                        raise
+                    failure = error
+        if admission is not None:
+            if name == "send":
+                admission["sendRetention"] = self.send_retention(api, caller)
+            api.assert_current()
             self.host.validate(caller)
-            self.bound(held)
-            if name == "receive" or name == "look" and args["at"] == "message":
-                if args and args != {"at": "message"}:
-                    raise Refusal("receive_has_no_target_arguments")
-                message = self.state.next_message(caller.root, node=api.credential["node"])
-                if message is None:
-                    self.tell_set_aside(held, api.credential["node"])
-                    return {"messages": [], "set_aside": len(self.state.rows("SELECT id FROM inbox WHERE root=? AND node=? AND set_aside=1 AND presented=0", (caller.root, api.credential["node"])))}
-                frame = json.loads(message["frame"])
-                if frame["subject"]["self_participant_ref"] != (await self.source(api, held))["session_ref"]:
-                    raise Refusal("message_source_changed")
-                repeat = bool(self.state.rows("SELECT id FROM handoffs WHERE message=? LIMIT 1", (message["id"],)))
-                pieces = pieces_for(frame, repeat=repeat)
-                def authorize():
-                    self.invocation(caller, held)
-                return self.state.handoff(message["id"], caller, pieces, authorize=authorize)
-            from .operations import Operation
-            operation = Operation(self, api, held, caller) if name == "read" else Tools(self, api, held, caller)
-            return await getattr(operation, name)(args, caller=caller)
+            if self.state.get("ended/" + caller.root):
+                raise Refusal("native_session_ended")
+            return admission
+        if failure is not None:
+            retention = self.send_retention(api, caller, getattr(operation, "send_body", None))
+        operation.guard()
+        if failure is not None:
+            failure.sendRetention = retention
+            raise failure
+        return result
+
+    def send_retention(self, api, caller, body=None):
+        try:
+            return self.state.send_retention(caller, node=api.credential["node"], body=body)
+        except Exception as error:
+            self.problem(error, operation="send retention read")
+            return "unconfirmed"
 
     def tell_set_aside(self, held, node):
         rows = self.state.rows("SELECT id FROM inbox WHERE root=? AND node=? AND set_aside=1 AND presented=0 AND notice_told=0", (held["root"], node))

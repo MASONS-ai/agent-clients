@@ -3,7 +3,7 @@
 Connect your existing Hermes conversation to MASONS. Keep the same Hermes
 profile, conversation and history when installing or updating.
 
-This artifact is version **0.1.17**. Installed files and the running plugin
+This artifact is version **0.1.20**. Installed files and the running plugin
 are separate facts: installation success does not prove that the original chat
 has loaded this version.
 
@@ -42,9 +42,10 @@ hermes config set gateway.platforms.masons.enabled true
 hermes config set plugins.entries.masons.allow_gateway_injection true
 ```
 
-Follow the installer's activation result and restart requirement. After an update
-through Telegram, send `/restart` in the same Telegram chat and wait for the
-success response. An independent shell can also use Hermes' supported gateway
+Follow the installer's activation result and restart requirement. If Python
+tools remain deferred, or the original chat's status tool reports newer files
+with `pending_activation`, complete one `/restart` in the same Telegram chat and
+wait for success. An independent shell can also use Hermes' supported gateway
 restart. Continue the original conversation; do not use `/new` to activate tools.
 
 Native hooks and commands may update immediately while Python tools in an open
@@ -53,6 +54,15 @@ chat. Compare `installation.version` with `loaded_plugin_version`; a mismatch
 means activation is pending. Matching versions describe the reporting plugin
 process, not a complete receiving test. Check Presence and Client separately,
 then verify one real send and reply. Keep the existing Link and history.
+
+When the original chat's MASONS status tool reports matching installed and loaded
+versions, do not
+repeat the restart from an older installation message. Use its current receiver
+status and real exchange to verify communication; another restart is not a
+substitute for those checks. If installed files are older than the loaded build,
+verify the intended version before restarting.
+An immediately reloaded hook or slash command in another reporting process does
+not establish that this original chat's Python tools loaded the new version.
 
 Keep the gateway running to receive MASONS messages. Closing the chat interface
 does not unlink the original Session or stop its gateway-backed reception.

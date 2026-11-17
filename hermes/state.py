@@ -26,6 +26,11 @@ def subject_key(value):
             else "waiting/" + value["message_ref"])
 
 
+def same_send_body(left, right):
+    return ({k: v for k, v in left.items() if k not in {"endpoint_id", "endpoint_nonce"}}
+            == {k: v for k, v in right.items() if k not in {"endpoint_id", "endpoint_nonce"}})
+
+
 class State:
     def __init__(self, directory, *, profile, channel, connection=None, vault=None):
         self.directory = Path(directory)
@@ -230,8 +235,8 @@ class State:
             db.execute("INSERT INTO handoffs(id,message,root,task,turn,request,call,part,total,result) VALUES(?,?,?,?,?,?,?,?,?,?)",
                        (identifier, message, caller.root, caller.task, caller.turn, caller.request, caller.call, part, len(pieces), result))
             db.execute("UPDATE inbox SET progress_at=COALESCE(progress_at,?) WHERE id=?", (time.time(), message))
-            subject = json.loads(row["frame"])["subject"]
-            self.bind(caller.root, subject, in_context=True)
+            frame = json.loads(row["frame"])
+            self.bind(caller.root, frame["subject"], in_context=True, speaker=frame["speaker"])
             return result
 
     def observe_context(self, root, working, effective, *, tool_name, authorize=None):
@@ -354,7 +359,7 @@ class State:
                 authorize()
             existing = db.execute("SELECT * FROM outbox WHERE root=? AND task=? AND turn=? AND request=? AND call=?", (caller.root, caller.task, caller.turn, caller.request, caller.call)).fetchone()
             if existing:
-                if existing["root"] != caller.root or existing["node"] != node or {k:v for k,v in json.loads(existing["body"]).items() if k not in {"endpoint_id","endpoint_nonce"}} != {k:v for k,v in body.items() if k not in {"endpoint_id","endpoint_nonce"}}:
+                if existing["root"] != caller.root or existing["node"] != node or not same_send_body(json.loads(existing["body"]), body):
                     raise Refusal("send_call_reused")
                 return dict(existing)
             pending = db.execute("SELECT * FROM outbox WHERE root=? AND node=? AND state='pending' ORDER BY rowid LIMIT 1", (caller.root, node)).fetchone()
@@ -363,6 +368,15 @@ class State:
             identifier = str(uuid.uuid4())
             db.execute("INSERT INTO outbox(id,root,node,task,turn,request,call,body,party) VALUES(?,?,?,?,?,?,?,?,?)", (identifier, caller.root, node, caller.task, caller.turn, caller.request, caller.call, encoded(body), encoded(party) if party else None))
             return dict(db.execute("SELECT * FROM outbox WHERE id=?", (identifier,)).fetchone())
+
+    def send_retention(self, caller, *, node, body=None):
+        rows = self.rows("SELECT node,body FROM outbox WHERE root=? AND task=? AND turn=? AND request=? AND call=?",
+                         (caller.root, caller.task, caller.turn, caller.request, caller.call))
+        if not rows:
+            return "not_retained"
+        if body is None:
+            return "unconfirmed"
+        return "retained" if rows[0]["node"] == node and same_send_body(json.loads(rows[0]["body"]), body) else "not_retained"
 
     def send_result(self, identifier, outcome):
         with self.transaction() as db:
@@ -376,15 +390,17 @@ class State:
             if row and outcome.get("subject"):
                 self.bind(row["root"], outcome["subject"], in_context=True, replaces=replaces)
 
-    def bind(self, root, value, *, in_context=False, replaces=None):
+    def bind(self, root, value, *, in_context=False, replaces=None, speaker=None):
         key = subject_key(value)
         with self.lock:
             existing = self.rows("SELECT subject FROM bindings WHERE root=? AND conversation=?", (root, key))
             if value["kind"] == "waiting" and existing and json.loads(existing[0]["subject"])["kind"] == "conversation":
                 value = json.loads(existing[0]["subject"])
-            elif existing and value["kind"] == "conversation":
-                previous = json.loads(existing[0]["subject"])
+            elif value["kind"] == "conversation" and (existing or speaker):
+                previous = json.loads(existing[0]["subject"]) if existing else {"participants": []}
                 known = {p["participant_ref"]: p for p in previous["participants"]}
+                if speaker and "pick_code" in speaker:
+                    known[speaker["participant_ref"]] = speaker
                 value = json.loads(encoded(value))
                 for party in value["participants"]:
                     old = known.get(party["participant_ref"], {})

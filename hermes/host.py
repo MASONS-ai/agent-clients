@@ -86,7 +86,7 @@ class Host:
         if installation["state"] != "installed":
             state, detail = "unverified", "Installed files are unverified; this does not prove uninstall."
         elif installation["version"] == build.VERSION:
-            state, detail = "versions_match", "Installed files match this reporting process. Original-chat tool activation and receiving require separate verification."
+            state, detail = "versions_match", "Installed files match this reporting process; this is not a reason for another restart. Use current original-chat receiver status and a real exchange for receiving verification. Do not repeat older installation or restart instructions."
         else:
             state = "pending_activation"
             newer = tuple(map(int, installation["version"].split("."))) > tuple(map(int, build.VERSION.split(".")))

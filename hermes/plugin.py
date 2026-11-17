@@ -18,6 +18,19 @@ from .tools import SCHEMAS, DESCRIPTIONS
 log = logging.getLogger("masons.hermes")
 
 
+def tool_failure(error):
+    result = {"error": error.code if isinstance(error, Refusal) else "operation_unconfirmed", "retry": False}
+    guidance = {
+        "not_retained": "This call's exact send is not retained in the local journal. This is not permission to retry. Older sends retain their own outcomes; unrelated historical outcomes do not identify this call.",
+        "retained": "This call's exact send is retained locally. Read its existing outcome and preserve its original identity; do not create another send. Retention does not establish Services acceptance or delivery.",
+        "unconfirmed": "Local retention of this exact send is unconfirmed; it may already be retained. Inspect existing records and outcomes; do not repeat the send or discard its records.",
+    }
+    retention = getattr(error, "sendRetention", None)
+    if isinstance(retention, str) and retention in guidance:
+        result.update(sendRetention=retention, detail=guidance[retention])
+    return encoded(result)
+
+
 def register(ctx):
     from gateway.config import Platform
     from gateway.platforms.base import BasePlatformAdapter, SendResult
@@ -55,11 +68,10 @@ def register(ctx):
             try:
                 result = await current().dispatch(name, args, event)
                 return result if isinstance(result, str) else encoded(result)
-            except Refusal as error:
-                return encoded({"error": error.code, "retry": False})
-            except Exception:
-                log.exception("MASONS tool failed")
-                return encoded({"error": "operation_unconfirmed", "retry": False})
+            except Exception as error:
+                if not isinstance(error, Refusal):
+                    log.exception("MASONS tool failed")
+                return tool_failure(error)
         return handler
 
     def execution(*, tool_name, args, next_call, session_id="", task_id="", turn_id="", tool_call_id="", api_request_id="", **event):
