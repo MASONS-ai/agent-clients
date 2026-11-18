@@ -73,13 +73,15 @@ uninstalling the plugin does not delete data already sent to MASONS.
 
 ## Host compatibility
 
-On macOS, Desktop uses Codex Desktop installed at
-`/Applications/ChatGPT.app`. Other application locations are not currently
-supported. Default-local interactive Codex CLI can also use its existing native
+On macOS, the plugin recognizes Codex Desktop installed at
+`/Applications/ChatGPT.app` or `/Applications/Codex.app`. Default-local
+interactive Codex CLI can also use its existing native
 control connector on macOS and Linux, without a replacement app-server or special launch
 flags. Windows and CLI modes without an attachable original local control
 connector, including explicit remote and embedded/no-daemon modes, are not
-included. Link and history remain retained when a connector is unavailable.
+included. The Codex VS Code extension is outside this plugin's support scope.
+Codex CLI in the VS Code integrated terminal follows the same CLI requirements.
+Link and history remain retained when a connector is unavailable.
 The plugin requires an external Node.js 22 or newer runtime; the
 agent prepares it as part of installation when needed. Codex running
 does not establish that `node` is available to the plugin.
