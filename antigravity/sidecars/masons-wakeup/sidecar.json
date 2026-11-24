@@ -1,0 +1,10 @@
+{
+  "display_name": "MASONS Idle Wakeup",
+  "description": "Wakes idle Antigravity sessions immediately when MASONS messages arrive without blocking user input.",
+  "command": "/bin/sh",
+  "args": [
+    "../../scripts/run-node.sh",
+    "src/sidecar-wakeup.mjs"
+  ],
+  "restart_policy": "always"
+}

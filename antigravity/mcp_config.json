@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "icm": {
+      "command": "/bin/sh",
+      "args": [
+        "${PLUGIN_ROOT}/scripts/run-node.sh",
+        "src/mcp-server.mjs"
+      ],
+      "timeoutSeconds": 60,
+      "tools": {
+        "masons_send": {
+          "eager": true
+        },
+        "masons_look": {
+          "eager": true
+        }
+      }
+    }
+  }
+}

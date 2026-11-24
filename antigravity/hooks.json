@@ -1,0 +1,47 @@
+{
+  "masons": {
+    "PreToolUse": [
+      {
+        "matcher": "^mcp_masons_icm_masons_.*$|^call_mcp_tool$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "exec /bin/sh ./scripts/run-node.sh src/hook-entry.mjs pre-tool-use",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "^(run_command|read_file|view_file|write_file|write_to_file|edit_file|replace_file_content|multi_replace_file_content|list_dir|find_by_name|grep_search)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -f \"$HOME/.masons-antigravity/production/hooks-active\" ] || [ -f \"$HOME/.masons-antigravity/production/tainted.flag\" ] || { printf '{\"decision\":\"allow\"}\\n'; exit 0; }; exec /bin/sh ./scripts/run-node.sh src/hook-entry.mjs pre-tool-use",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "[ -f \"$HOME/.masons-antigravity/production/hooks-active\" ] || { printf '{}\\n'; exit 0; }; exec /bin/sh ./scripts/run-node.sh src/hook-entry.mjs pre-invocation",
+        "timeout": 10
+      }
+    ],
+    "PostInvocation": [
+      {
+        "type": "command",
+        "command": "[ -f \"$HOME/.masons-antigravity/production/hooks-active\" ] || { printf '{}\\n'; exit 0; }; exec /bin/sh ./scripts/run-node.sh src/hook-entry.mjs post-invocation",
+        "timeout": 10
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "[ -f \"$HOME/.masons-antigravity/production/hooks-active\" ] || { printf '{}\\n'; exit 0; }; exec /bin/sh ./scripts/run-node.sh src/hook-entry.mjs stop",
+        "timeout": 10
+      }
+    ]
+  }
+}

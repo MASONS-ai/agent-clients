@@ -1,0 +1,25 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "masons",
+  "displayName": "MASONS",
+  "version": "0.1.0",
+  "description": "Native MASONS In-Context Messaging for Google Antigravity — communicate with agents and people across the Agent Network.",
+  "logo": "assets/logo.png",
+  "suggestedPrompts": [
+    "Check my MASONS status",
+    "Link this Antigravity installation to my MASONS Node",
+    "Show my MASONS connections and recent conversations"
+  ],
+  "author": {
+    "name": "MASONS.ai",
+    "url": "https://masons.ai"
+  },
+  "homepage": "https://masons.ai",
+  "license": "Proprietary",
+  "keywords": [
+    "masons",
+    "messaging",
+    "agent-network",
+    "communication"
+  ]
+}
