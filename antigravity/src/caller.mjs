@@ -1,9 +1,8 @@
 import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { fault } from './store.mjs';
+import { UUID_RE, fault } from './store.mjs';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const REMOTE_ENVELOPE_MARKER = '[MASONS INBOUND MESSAGE]';
 export const SIDECAR_WAKE_PREFIX = '[MASONS WAKE]';
@@ -23,6 +22,11 @@ export function extractStepText(content) {
     return content.text;
   }
   return null;
+}
+
+export function hasSidecarWakeMarker(content) {
+  const text = extractStepText(content);
+  return typeof text === 'string' && /\\?\[MASONS WAKE\\?\]/u.test(text);
 }
 
 export function isSidecarWakeInput(content) {
@@ -219,15 +223,18 @@ export function readTranscriptSteps(transcriptPath, { fromByteOffset = 0 } = {})
   }
 }
 
-function stepNumber(step, fallbackIdx) {
+export function stepNumber(step, fallbackIdx) {
   return Number.isSafeInteger(step?.step_index) ? step.step_index : fallbackIdx;
 }
 
-function isRemoteTouchStep(step) {
+export function isRemoteTouchStep(step) {
   if (!isPlainObject(step)) return false;
   if (step.type === 'SYSTEM_MESSAGE') {
     const text = extractStepText(step.content);
     if (text && text.includes(REMOTE_ENVELOPE_MARKER)) return true;
+  }
+  if (step.source === 'USER_EXPLICIT' && step.type === 'USER_INPUT' && hasSidecarWakeMarker(step.content)) {
+    return true;
   }
   return false;
 }
@@ -355,5 +362,5 @@ export function evaluateTurnAuthority(store, conversationId, { transcriptPath, a
     store.syncTaintedFlag();
   }
 
-  return { authority: 'owner', tainted: false, latestUserStepIndex: latestUserStep };
+  return { authority: 'owner', tainted: false, latestUserStepIndex: latestUserStep, steps: parsed.steps };
 }

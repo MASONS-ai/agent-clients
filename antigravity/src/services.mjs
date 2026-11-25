@@ -853,7 +853,7 @@ export class Services {
     this.serverTime = undefined;
   }
 
-  async request(path, body, { method = 'POST', headers = {}, auth = true, expected, signal } = {}) {
+  async request(path, body, { method = 'POST', headers = {}, auth = true, expected, retry = true, signal } = {}) {
     this.assertCurrent();
     if (typeof path !== 'string' || !path || path.startsWith('/') || path.includes('..') || path.includes('#') || /^[a-z]+:/i.test(path)) {
       throw new Refusal('services_path_invalid');
@@ -862,10 +862,12 @@ export class Services {
     if (url.origin !== this.api || !url.pathname.startsWith('/v1/')) {
       throw new Refusal('services_path_invalid');
     }
-    const canRetryTransport = isIdempotentForTransportRetry(path, method);
-    const maxAttempts = this.usePooledNodeHttp
-      ? (canRetryTransport ? 3 : 2)
-      : (canRetryTransport ? 2 : 1);
+    const canRetryTransport = retry && isIdempotentForTransportRetry(path, method);
+    const maxAttempts = !retry
+      ? 1
+      : this.usePooledNodeHttp
+        ? (canRetryTransport ? 3 : 2)
+        : (canRetryTransport ? 2 : 1);
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       this.assertCurrent();
@@ -1086,6 +1088,67 @@ export class Services {
     );
   }
 
+  async updateDisplayMetadata(registration, { hostSessionName }, { signal } = {}) {
+    const ep = endpointCred(registration);
+    const name = text(hostSessionName, 'host_session_name_invalid');
+    const value = record(await this.request(
+      `runtime-endpoints/${encodeURIComponent(ep.endpoint_id)}/display-metadata`,
+      { host_session_name: name },
+      { signal },
+    ));
+    if (value.endpoint_id !== ep.endpoint_id) {
+      throw new Refusal('display_metadata_unreadable');
+    }
+    const ack = record(value.host_session_name, 'display_metadata_unreadable');
+    if (typeof ack.accepted !== 'boolean') {
+      throw new Refusal('display_metadata_unreadable');
+    }
+    const reason = typeof ack.reason === 'string' && ack.reason.trim() ? ack.reason.trim() : null;
+    if (!ack.accepted && !reason) {
+      throw new Refusal('display_metadata_unreadable');
+    }
+    return {
+      endpoint_id: value.endpoint_id,
+      accepted: ack.accepted,
+      ...(reason && { reason }),
+    };
+  }
+
+  async reportActivity(registration, { nativeActivity, agentLastMessage } = {}, { signal } = {}) {
+    const ep = endpointCred(registration);
+    const body = {};
+    if (nativeActivity) {
+      body.native_activity = {
+        value: text(nativeActivity.value, 'activity_value_invalid'),
+        observed_at: instant(nativeActivity.observedAt),
+      };
+    }
+    if (agentLastMessage) {
+      body.agent_last_message = {
+        value: text(agentLastMessage.value, 'activity_value_invalid'),
+        observed_at: instant(agentLastMessage.observedAt),
+      };
+    }
+    if (Object.keys(body).length === 0) return null;
+    return this.request(
+      `runtime-endpoints/${encodeURIComponent(ep.endpoint_id)}/display-metadata`,
+      body,
+      { retry: false, signal },
+    );
+  }
+
+  async submitTyping(registration, conversationRef, { signal } = {}) {
+    const ep = endpointCred(registration);
+    const convRef = text(conversationRef, 'typing_conversation_invalid');
+    if (convRef.length > 512) throw new Refusal('typing_conversation_invalid');
+    // Services typing spec: never retry typing pulses.
+    return this.request('runtime/typing', {
+      conversation_ref: convRef,
+      endpoint_id: ep.endpoint_id,
+      endpoint_nonce: ep.endpoint_nonce,
+    }, { expected: 204, retry: false, signal });
+  }
+
   async postReceipt(registration, { act, messageRef, contentDigest: digest, endpointId, endpointNonce }, { signal } = {}) {
     const ep = endpointCred(registration);
     if (ep.endpoint_id !== endpointId || ep.endpoint_nonce !== endpointNonce) {
@@ -1099,11 +1162,13 @@ export class Services {
     }, { expected: 204, signal });
   }
 
-  controlAck(idempotencyKey, { signal } = {}) {
+  controlAck(idempotencyKey, { status = 'applied', detail, signal } = {}) {
+    if (!['received', 'applied', 'failed'].includes(status)) throw new Refusal('control_ack_status_invalid');
     return this.request('runtime/control-ack', {
       idempotency_key: text(idempotencyKey),
-      status: 'applied',
-    }, { signal });
+      status,
+      ...(typeof detail === 'string' && detail.trim() && { detail: detail.trim() }),
+    }, { expected: 204, signal });
   }
 
   async resolveTargets(registration, query, continuation, { signal } = {}) {
@@ -1383,7 +1448,15 @@ export class Services {
               text(raw.type === 'session_resume' ? raw.runtime_session_id : raw.endpoint_id, 'stream_control_unreadable');
             }
             if (raw.type === 'caught_up' || raw.type === 'typing') text(raw.endpoint_id, 'stream_frame_unreadable');
-            if (raw.type === 'typing') text(raw.conversation_ref, 'stream_frame_unreadable');
+            if (raw.type === 'typing') {
+              const ref = text(raw.conversation_ref, 'stream_frame_unreadable');
+              if (ref.length > 512) throw new Refusal('stream_frame_unreadable');
+              const recipient = record(raw.recipient, 'stream_frame_unreadable');
+              if (Object.hasOwn(recipient, 'runtime_session_id') === Object.hasOwn(recipient, 'node_id')) {
+                throw new Refusal('stream_frame_unreadable');
+              }
+              text(Object.hasOwn(recipient, 'runtime_session_id') ? recipient.runtime_session_id : recipient.node_id, 'stream_frame_unreadable');
+            }
             await onFrame(raw.type === 'message' ? parseMessageFrame(raw) : raw);
             this.assertCurrent();
           }).catch(finish).finally(() => {

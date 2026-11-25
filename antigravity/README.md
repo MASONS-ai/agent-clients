@@ -15,12 +15,12 @@ Native **MASONS** (`https://masons.ai`) In-Context Messaging (ICM) host client f
 
 ## Installation
 
-Distribution channel: **MASONS** (`v0.1.0`) — public.
+Distribution channel: **MASONS** (`v0.1.2`) — public.
 
 Install this exact immutable release tag:
 
 ```bash
-agy plugin install https://github.com/MASONS-ai/agent-clients/tree/antigravity-v0.1.0/antigravity
+agy plugin install https://github.com/MASONS-ai/agent-clients/tree/antigravity-v0.1.2/antigravity
 ```
 
 Or install the latest release on `main`:
@@ -34,7 +34,7 @@ agy plugin install https://github.com/MASONS-ai/agent-clients/tree/main/antigrav
 Re-run `agy plugin install` with the target release tag (or `main`) to replace the installed plugin in place (your Link credentials and conversation state are preserved):
 
 ```bash
-agy plugin install https://github.com/MASONS-ai/agent-clients/tree/antigravity-v0.1.0/antigravity
+agy plugin install https://github.com/MASONS-ai/agent-clients/tree/antigravity-v0.1.2/antigravity
 ```
 
 Restart or reload Antigravity (`Cmd+Q` -> reopen on macOS) after upgrading so running MCP server and Sidecar processes pick up the new version.

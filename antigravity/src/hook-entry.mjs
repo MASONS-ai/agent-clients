@@ -2,6 +2,7 @@ import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { extractTranscriptActivity, isActivityReportingDisabled } from './activity.mjs';
 import { CONFIG } from './build-config.mjs';
 import {
   canonicalizePath,
@@ -13,7 +14,7 @@ import {
   markRemoteTaint,
 } from './caller.mjs';
 import { canonicalStateRoot } from './channel.mjs';
-import { antigravityDeclaration } from './declaration.mjs';
+import { CONVERSATION_TYPING_CAPABILITY, declarationFromRegistration } from './declaration.mjs';
 import { readSettings } from './owner.mjs';
 import { computeReplyTo, renderInboundEnvelope, verifyPresentedInTranscript } from './presentation.mjs';
 import { Services, closeSharedAgents } from './services.mjs';
@@ -22,6 +23,7 @@ import { StateStore } from './store.mjs';
 const MAX_PRESENTATION_ATTEMPTS = 3;
 const HOOK_REQUEST_TIMEOUT_MS = 3000;
 const HOOK_RECONCILE_BUDGET_MS = 4500;
+const HOOK_ACTIVITY_TIMEOUT_MS = 1500;
 const DEFAULT_PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const READONLY_MASONS_TOOLS = new Set([
   'masons_send',
@@ -57,6 +59,19 @@ const WRITE_AND_SHELL_TOOLS = new Set([
 ]);
 const SHELL_PROTECTED_RE = /\.?masons-antigravity|masons_rt_v1_|transcript(?:_full)?\.jsonl|tainted\.flag|hooks-active|\.agents[/\\]+(?:\.[/\\]+)*(?:hooks|mcp_config)\.json|\.gemini[/\\]+(?:config|antigravity(?:-cli)?)[/\\]+(?:hooks|mcp_config|plugins)|\.system_generated[/\\]+logs|PLUGIN_ROOT/iu;
 const SHELL_HOME_OBFUSCATION_RE = /\$(?:\{?HOME\}?|~)|~\/|\b(?:homedir|expanduser)\s*\(|\b(?:cat|head|tail|less|more|grep|rg|awk|sed|dd|cp|rm|mv|tee|jq|find|tar|base64|xxd|od|python3?|node|perl|ruby|sh|zsh|bash)\b.*(?:\.masons|\.gemini|\.agents)|(?:^|[;&|\n])\s*cd\s*(?:$|[;&|\n])/isu;
+const SHELL_TAINTED_LS_CONTROL_RE = /ANTIGRAVITY_CSRF_TOKEN|ANTIGRAVITY_LS_ADDRESS|x-antigravity-csrf-token|x-codeium-csrf-token|ConversationService|product\.v1\.|exa\.language_server_pb|\bagentapi\b/iu;
+const SHELL_TAINTED_ENV_DUMP_RE = /(?:^|[;&|\n(`]|&&|\|\|)\s*(?:\/\S*\/)?(?:printenv|env|export|declare|typeset|compgen|set)(?:$|[;&|\n\s)`])|\/proc\/[^/\s]+\/environ|\bps\s+[^\n;|&]*e|\bos\.(?:environ|getenv)\b|\bprocess(?:\.env|\s*\[)|\bReflect\.get\b|\bENVIRON\b|%ENV|\$ENV\s*\{|\bENV\s*\[/iu;
+const SHELL_DISPLAY_ONLY_KEYS = new Set(['toolSummary', 'Summary', 'Description']);
+
+function collectShellValues(args) {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return collectStringValues(args);
+  const out = [];
+  for (const [k, v] of Object.entries(args)) {
+    if (SHELL_DISPLAY_ONLY_KEYS.has(k)) continue;
+    collectStringValues(v, out);
+  }
+  return out;
+}
 
 function parseMasonsArgs(raw) {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
@@ -177,7 +192,7 @@ function checkProtectedPaths(toolName, args, {
   tainted,
 }) {
   const effectiveCwd = cwd || workspacePaths[0] || '';
-  const values = toolName === 'run_command' ? collectStringValues(args) : collectPathValues(toolName, args, effectiveCwd);
+  const values = toolName === 'run_command' ? collectShellValues(args) : collectPathValues(toolName, args, effectiveCwd);
   const masonsRoot = resolve(home, '.masons-antigravity');
   const isWriteOrShell = WRITE_AND_SHELL_TOOLS.has(toolName);
   const allBrainRoots = (brainRoots ?? defaultBrainRoots(home)).map((br) => canonicalizePath(br));
@@ -187,6 +202,12 @@ function checkProtectedPaths(toolName, args, {
     for (const val of values) {
       if (SHELL_PROTECTED_RE.test(val)) {
         return 'Protected MASONS state, transcripts, and hook/MCP/plugin config cannot be accessed via shell commands.';
+      }
+      if (tainted && SHELL_TAINTED_LS_CONTROL_RE.test(val)) {
+        return 'Antigravity Language Server APIs, CSRF tokens, ConversationService, and agentapi are blocked on remote-tainted turns.';
+      }
+      if (tainted && SHELL_TAINTED_ENV_DUMP_RE.test(val)) {
+        return 'Environment inspection commands are blocked on remote-tainted turns.';
       }
       if (tainted && SHELL_HOME_OBFUSCATION_RE.test(val)) {
         return 'Shell access targeting home dot-directories is blocked on remote-tainted turns.';
@@ -301,9 +322,7 @@ async function postPresentedReceipt(config, store, conversationId, row, makeServ
   } catch (error) {
     if (error?.status === 409 && (error?.code === 'not_driver' || error?.code === 'endpoint_unavailable')) {
       try {
-        const declaration = antigravityDeclaration({
-          idleWakeup: reg.response?.background_exchange_mode === 'adapter_managed_turn',
-        });
+        const declaration = declarationFromRegistration(reg);
         await api.inspectEndpoint(reg, { declaration, signal });
       } catch (inspectErr) {
         if (inspectErr?.code === 'registration_superseded') {
@@ -470,6 +489,114 @@ function isConversationOrAncestorTainted(store, payload, { brainRoots }) {
   return false;
 }
 
+function isSubagentPayload(payload, conversationId) {
+  if (typeof payload?.parentConversationId === 'string' && payload.parentConversationId.trim()) return true;
+  if (typeof payload?.rootConversationId === 'string' && payload.rootConversationId.trim() &&
+      payload.rootConversationId.trim().toLowerCase() !== conversationId) {
+    return true;
+  }
+  return false;
+}
+
+function parseIsoMs(value) {
+  if (typeof value !== 'string') return 0;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function maxIso(a, b) {
+  return parseIsoMs(b) > parseIsoMs(a) ? b : a;
+}
+
+async function reportTranscriptActivityBestEffort({
+  store,
+  conversationId,
+  transcriptPath,
+  artifactsDir,
+  brainRoots,
+  includeAssistantReply = false,
+  auth = null,
+  makeServices,
+  env = process.env,
+}) {
+  if (isActivityReportingDisabled(env)) return false;
+  const held = readSettings(store);
+  if (!held.credential?.token || !held.credential?.node) return false;
+  const chat = store.readChat(conversationId);
+  const reg = chat.registration;
+  if (reg?.state !== 'active' || !reg.response?.endpoint_id || reg.nodeId !== held.credential.node) return false;
+
+  // Both native_activity and agent_last_message require a verified, untainted owner turn;
+  // reuse turnAuth.steps directly (zero double transcript read/parse and zero TOCTOU gap).
+  const turnAuth = auth ?? evaluateTurnAuthority(store, conversationId, { transcriptPath, artifactsDir, brainRoots });
+  if (turnAuth.authority !== 'owner' || turnAuth.tainted || !Array.isArray(turnAuth.steps)) return false;
+
+  const { latestUserPrompt, latestAssistantReply } = extractTranscriptActivity(turnAuth.steps, { includeAssistantReply });
+  const prev = chat.activity ?? {};
+  const payload = {};
+
+  // Enforce strict causal sub-second monotonicity against prior watermark so 1s Antigravity
+  // transcript timestamps never collide on Services' strict $lt guard or Passport's reply >= ask tie-breaker.
+  let watermarkMs = Math.max(parseIsoMs(prev.userPromptObservedAt), parseIsoMs(prev.agentLastMsgObservedAt));
+  let nextPromptIso = null;
+  let nextReplyIso = null;
+
+  if (
+    latestUserPrompt &&
+    latestUserPrompt.stepIndex === turnAuth.latestUserStepIndex &&
+    latestUserPrompt.stepIndex > (prev.userPromptStepIndex ?? -1)
+  ) {
+    const promptMs = Math.max(parseIsoMs(latestUserPrompt.observedAt), watermarkMs + 1);
+    nextPromptIso = new Date(promptMs).toISOString();
+    watermarkMs = promptMs;
+    payload.nativeActivity = {
+      value: latestUserPrompt.text,
+      observedAt: nextPromptIso,
+    };
+  }
+
+  if (
+    includeAssistantReply &&
+    latestAssistantReply &&
+    latestAssistantReply.stepIndex > turnAuth.latestUserStepIndex &&
+    latestAssistantReply.stepIndex > (prev.agentLastMsgStepIndex ?? -1)
+  ) {
+    const replyMs = Math.max(parseIsoMs(latestAssistantReply.observedAt), watermarkMs + 1);
+    nextReplyIso = new Date(replyMs).toISOString();
+    payload.agentLastMessage = {
+      value: latestAssistantReply.text,
+      observedAt: nextReplyIso,
+    };
+  }
+
+  if (!payload.nativeActivity && !payload.agentLastMessage) return false;
+
+  try {
+    const api = makeServices(held.credential);
+    await api.reportActivity(reg, payload, { signal: AbortSignal.timeout(HOOK_ACTIVITY_TIMEOUT_MS) });
+    const expectedEpId = reg.response.endpoint_id;
+    store.updateChat(conversationId, (c) => {
+      if (c.registration?.state !== 'active' || c.registration.response?.endpoint_id !== expectedEpId) return c;
+      const cur = c.activity ?? {};
+      c.activity = {
+        ...cur,
+        ...(payload.nativeActivity && {
+          userPromptStepIndex: Math.max(cur.userPromptStepIndex ?? -1, latestUserPrompt.stepIndex),
+          userPromptObservedAt: maxIso(cur.userPromptObservedAt, nextPromptIso),
+        }),
+        ...(payload.agentLastMessage && {
+          agentLastMsgStepIndex: Math.max(cur.agentLastMsgStepIndex ?? -1, latestAssistantReply.stepIndex),
+          agentLastMsgObservedAt: maxIso(cur.agentLastMsgObservedAt, nextReplyIso),
+        }),
+      };
+      return c;
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function handleHookEvent(event, payload, {
   config = CONFIG,
   store,
@@ -559,9 +686,10 @@ export async function handleHookEvent(event, payload, {
       if (violation) {
         return { decision: 'deny', reason: violation };
       }
-      // On remote-tainted turns, require explicit owner approval for unsandboxed shell commands.
-      if (tainted && toolCall.name === 'run_command' && effectiveArgs?.BypassSandbox === true) {
-        return { decision: 'ask', reason: 'Unsandboxed shell command requested on a remote-tainted turn.' };
+      // On remote-tainted turns, require fresh explicit owner approval (ignoring cached Always Allow)
+      // for ANY shell execution — closes script-file indirection, quoting obfuscation, and BypassSandbox variants.
+      if (tainted && toolCall.name === 'run_command') {
+        return { decision: 'force_ask', reason: 'Shell command requested on a remote-tainted turn.' };
       }
     }
     return { decision: 'allow' };
@@ -574,10 +702,16 @@ export async function handleHookEvent(event, payload, {
 
     const located = locateTranscriptPath(conversationId, { transcriptPath, artifactsDir, brainRoots });
     const preOffset = fileSizeOrZero(located);
+    const wakeSnapshot = store.readJson(store.wakePath(conversationId), null);
+    const wakeToken = typeof wakeSnapshot?.wakeToken === 'string' ? wakeSnapshot.wakeToken : null;
 
     // Check for any unannounced dead-lettered messages first so the principal is notified.
     let deadLetterNotice = null;
     let claimed = null;
+    let claimedConversationRef = null;
+    let unambiguousTypingTarget = null;
+    let hasRemainingPending = false;
+    let hasAnyInFlight = false;
     store.updateChat(conversationId, (c) => {
       const dead = (c.inbox ?? []).find((r) => r.phase === 'dead_letter' && r.deadLetterNoticed === false);
       if (dead) {
@@ -586,7 +720,10 @@ export async function handleHookEvent(event, payload, {
       }
 
       const pending = (c.inbox ?? []).find((r) => r.phase === 'pending');
-      if (!pending) return c;
+      if (!pending) {
+        hasAnyInFlight = (c.inbox ?? []).some((r) => r.phase === 'in_flight');
+        return c;
+      }
       const conv = (c.conversations ?? []).find((x) => x.conversation_ref === pending.frame.subject.conversation_ref);
       const replyTo = computeReplyTo(pending.frame, conv);
       const rendered = renderInboundEnvelope(pending.frame, {
@@ -599,12 +736,69 @@ export async function handleHookEvent(event, payload, {
       pending.oversized = rendered.oversized;
       pending.renderedText = rendered.text;
       claimed = rendered;
+      claimedConversationRef = pending.frame.subject.conversation_ref;
+      hasRemainingPending = (c.inbox ?? []).some((r) => r.phase === 'pending');
+      hasAnyInFlight = true;
+
+      const reg = c.registration;
+      const caps = Array.isArray(reg?.response?.runtime_capabilities) ? reg.response.runtime_capabilities : [];
+      const activeConvRefs = new Set(
+        (c.inbox ?? [])
+          .filter((r) => r.phase === 'in_flight' && typeof r.frame?.subject?.conversation_ref === 'string')
+          .map((r) => r.frame.subject.conversation_ref),
+      );
+      if (
+        reg?.state === 'active' &&
+        reg.response?.endpoint_id &&
+        caps.includes(CONVERSATION_TYPING_CAPABILITY) &&
+        activeConvRefs.size === 1 &&
+        claimedConversationRef
+      ) {
+        unambiguousTypingTarget = {
+          conversationRef: claimedConversationRef,
+          endpointId: reg.response.endpoint_id,
+        };
+      }
       return c;
     });
 
-    if (claimed) {
-      const remaining = (store.readChat(conversationId).inbox ?? []).some((r) => r.phase === 'pending');
-      if (!remaining) store.clearWakeTrigger(conversationId);
+    if (claimed && !hasRemainingPending && wakeToken) {
+      store.clearWakeTrigger(conversationId, wakeToken);
+    }
+
+    let cleanOwnerAuth = null;
+    if (unambiguousTypingTarget) {
+      try {
+        store.writeTypingMarker(conversationId, unambiguousTypingTarget);
+      } catch {}
+    } else if (claimed) {
+      // Ambiguous multi-conversation in-flight turn or incapable endpoint: stop any prior typing marker.
+      store.clearTypingMarker(conversationId);
+    } else if (!hasAnyInFlight) {
+      // Cheap pre-checks before parsing full transcript: only run evaluateTurnAuthority if a typing
+      // marker exists OR this root conversation has an active registration eligible for activity reporting.
+      const hasTypingMarker = store.readTypingMarker(conversationId) !== null;
+      const held = readSettings(store);
+      const curChat = store.readChat(conversationId);
+      const canReportActivity =
+        !isSubagentPayload(payload, conversationId) &&
+        !isActivityReportingDisabled() &&
+        Boolean(held.credential?.token && held.credential?.node) &&
+        curChat.registration?.state === 'active' &&
+        Boolean(curChat.registration.response?.endpoint_id) &&
+        curChat.registration.nodeId === held.credential.node;
+
+      if (hasTypingMarker || canReportActivity) {
+        const auth = evaluateTurnAuthority(store, conversationId, {
+          transcriptPath: located ?? transcriptPath,
+          artifactsDir,
+          brainRoots,
+        });
+        if (auth.authority === 'owner' && !auth.tainted) {
+          cleanOwnerAuth = canReportActivity ? auth : null;
+          if (hasTypingMarker) store.clearTypingMarker(conversationId);
+        }
+      }
     }
 
     const injectSteps = [];
@@ -620,6 +814,17 @@ export async function handleHookEvent(event, payload, {
       });
       // Strictly plain systemMessage with NO metadata field.
       injectSteps.push({ systemMessage: { systemMessage: claimed.text } });
+    } else if (cleanOwnerAuth) {
+      await reportTranscriptActivityBestEffort({
+        store,
+        conversationId,
+        transcriptPath: located ?? transcriptPath,
+        artifactsDir,
+        brainRoots,
+        includeAssistantReply: false,
+        auth: cleanOwnerAuth,
+        makeServices,
+      });
     }
     return injectSteps.length > 0 ? { injectSteps } : {};
   }
@@ -631,26 +836,38 @@ export async function handleHookEvent(event, payload, {
 
   if (event === 'stop') {
     await reconcileInFlight({ config, store, conversationId, transcriptPath, artifactsDir, brainRoots, makeServices });
+    // Every Stop ends the active invocation; if Stop triggers a continuation, the next PreInvocation re-arms typing for the exact claimed conversation.
+    store.clearTypingMarker(conversationId);
 
     const held = readSettings(store);
-    if (!held.credential?.token) return {};
+    if (!held.credential?.token) {
+      return {};
+    }
 
     const chat = store.readChat(conversationId);
-    if (chat.registration?.state === 'fenced') return {};
+    if (chat.registration?.state === 'fenced') {
+      return {};
+    }
 
     const hasPending = (chat.inbox ?? []).some((r) => r.phase === 'pending');
-    if (payload?.terminationReason !== 'NO_TOOL_CALL' || payload?.executionNum !== 0) {
-      // Turn is ending without continuation (e.g. >=3-message burst or Stop(ERROR) revert):
-      // re-arm host-scoped wake trigger so Sidecar wakes a fresh turn for remaining pending messages.
-      if (hasPending && chat.hostProvenance?.hostPid) {
+    const canContinue =
+      payload?.terminationReason === 'NO_TOOL_CALL' &&
+      payload?.continuationActive !== true &&
+      payload?.executionNum === 0;
+
+    if (hasPending && chat.hostProvenance?.hostPid) {
+      // On non-continue exits, always write a fresh wake trigger so Sidecar wakes a new turn immediately.
+      // When returning decision: 'continue', only write if no trigger already exists (avoiding a new wakeToken
+      // that cancels Sidecar's busy-backoff down to 350ms while continuation PreInvocation starts).
+      const shouldWriteTrigger = !canContinue || !store.readJson(store.wakePath(conversationId), null);
+      if (shouldWriteTrigger) {
         try {
           store.writeWakeTrigger(conversationId, { queuedAt: Date.now(), ...chat.hostProvenance });
         } catch {}
       }
-      return {};
     }
 
-    if (hasPending) {
+    if (hasPending && canContinue) {
       markRemoteTaint(store, conversationId, {
         reason: 'stop_continue_inbound',
         transcriptPath,
@@ -661,6 +878,18 @@ export async function handleHookEvent(event, payload, {
         decision: 'continue',
         reason: 'New inbound MASONS message arrived during generation; delivering it now.',
       };
+    }
+
+    if (!hasPending && payload?.terminationReason === 'NO_TOOL_CALL' && !isSubagentPayload(payload, conversationId)) {
+      await reportTranscriptActivityBestEffort({
+        store,
+        conversationId,
+        transcriptPath,
+        artifactsDir,
+        brainRoots,
+        includeAssistantReply: true,
+        makeServices,
+      });
     }
 
     return {};

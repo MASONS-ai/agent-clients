@@ -25,7 +25,7 @@ const MAX_DEDUPE_ENTRIES = 10000;
 const LOCK_SPIN_TIMEOUT_MS = 2000;
 const CORRUPT_LOCK_GRACE_MS = 5000;
 const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 export const fault = (code, extra) => Object.assign(new Error(code), { code, ...extra });
 export const fingerprint = (value) => createHash('sha256').update(typeof value === 'string' ? value : value.token).digest('hex');
@@ -556,11 +556,15 @@ export class StateStore {
     });
   }
 
-  wakePath(conversationId) {
+  conversationFilePath(subdir, conversationId) {
     if (typeof conversationId !== 'string' || !UUID_RE.test(conversationId)) {
       throw fault('conversation_id_invalid');
     }
-    return `wake/${conversationId.toLowerCase()}.json`;
+    return `${subdir}/${conversationId.toLowerCase()}.json`;
+  }
+
+  wakePath(conversationId) {
+    return this.conversationFilePath('wake', conversationId);
   }
 
   writeWakeTrigger(conversationId, payload) {
@@ -614,12 +618,69 @@ export class StateStore {
     return triggers;
   }
 
+  typingPath(conversationId) {
+    return this.conversationFilePath('typing', conversationId);
+  }
+
+  writeTypingMarker(conversationId, payload) {
+    this.ensureSubdir('typing');
+    const rel = this.typingPath(conversationId);
+    return this.withFileLock(`typing:${conversationId.toLowerCase()}`, () =>
+      this.writeJsonAtomic(rel, {
+        conversationId: conversationId.toLowerCase(),
+        conversationRef: payload.conversationRef,
+        endpointId: payload.endpointId,
+        token: payload?.token ?? randomUUID(),
+        startedAt: payload?.startedAt ?? Date.now(),
+      }),
+    );
+  }
+
+  readTypingMarker(conversationId) {
+    try {
+      return this.readJson(this.typingPath(conversationId), null);
+    } catch {
+      return null;
+    }
+  }
+
+  clearTypingMarker(conversationId, { token = null, conversationRef = null } = {}) {
+    try {
+      const rel = this.typingPath(conversationId);
+      this.withFileLock(`typing:${conversationId.toLowerCase()}`, () => {
+        if (token || conversationRef) {
+          const cur = this.readJson(rel, null);
+          if (!cur) return;
+          if (token && cur.token !== token) return;
+          if (conversationRef && cur.conversationRef !== conversationRef) return;
+        }
+        this.deleteFile(rel);
+      });
+    } catch {
+      // Best-effort cleanup.
+    }
+  }
+
   sidecarHeartbeatPath(hostPid) {
     if (!Number.isSafeInteger(hostPid) || hostPid < 1) throw fault('host_pid_invalid');
     return `sidecars/host-${hostPid}.json`;
   }
 
-  writeSidecarHeartbeat({ pid = process.pid, hostPid, hostStartToken = null, startedAt, updatedAt = Date.now() } = {}) {
+  sidecarSocketPath(hostPid) {
+    if (!Number.isSafeInteger(hostPid) || hostPid < 1) throw fault('host_pid_invalid');
+    return this.resolveSafe(`sidecars/s-${hostPid}.sock`);
+  }
+
+  writeSidecarHeartbeat({
+    pid = process.pid,
+    hostPid,
+    hostStartToken = null,
+    startedAt,
+    updatedAt = Date.now(),
+    conversationService = false,
+    socketPath = null,
+    ipcToken = null,
+  } = {}) {
     this.ensureSubdir('sidecars');
     return this.writeJsonAtomic(this.sidecarHeartbeatPath(hostPid), {
       pid,
@@ -627,6 +688,9 @@ export class StateStore {
       hostStartToken: hostStartToken ?? null,
       startedAt: startedAt ?? updatedAt,
       updatedAt,
+      ...(conversationService === true && { conversationService: true }),
+      ...(typeof socketPath === 'string' && socketPath && { socketPath }),
+      ...(typeof ipcToken === 'string' && ipcToken && { ipcToken }),
     });
   }
 
@@ -642,25 +706,31 @@ export class StateStore {
 
   readSidecarStatus(hostProvenance, nowMs = Date.now()) {
     if (!Number.isSafeInteger(hostProvenance?.hostPid) || hostProvenance.hostPid < 1) {
-      return { running: false };
+      return { running: false, conversationService: false };
     }
     try {
       const hb = this.readJson(this.sidecarHeartbeatPath(hostProvenance.hostPid), null);
       if (!hb || !Number.isSafeInteger(hb.pid) || !Number.isFinite(hb.updatedAt)) {
-        return { running: false };
+        return { running: false, conversationService: false };
       }
-      if (!sameHostProvenance(hb, hostProvenance)) return { running: false };
-      if (nowMs - hb.updatedAt > 90_000) return { running: false };
-      if (!isPidAlive(hb.pid)) return { running: false };
+      if (!sameHostProvenance(hb, hostProvenance)) return { running: false, conversationService: false };
+      if (nowMs - hb.updatedAt > 90_000) return { running: false, conversationService: false };
+      if (!isPidAlive(hb.pid)) return { running: false, conversationService: false };
+      const expectedSocketPath = this.sidecarSocketPath(hostProvenance.hostPid);
+      const hasConvService = hb.conversationService === true &&
+        hb.socketPath === expectedSocketPath &&
+        typeof hb.ipcToken === 'string' && hb.ipcToken.length > 0;
       return {
         running: true,
         pid: hb.pid,
         hostPid: hb.hostPid,
         startedAt: hb.startedAt ?? hb.updatedAt,
         updatedAt: hb.updatedAt,
+        conversationService: hasConvService,
+        ...(hasConvService && { socketPath: hb.socketPath, ipcToken: hb.ipcToken }),
       };
     } catch {
-      return { running: false };
+      return { running: false, conversationService: false };
     }
   }
 

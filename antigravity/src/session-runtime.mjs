@@ -1,11 +1,20 @@
 import { randomUUID } from 'node:crypto';
+import { watch } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { evaluateTurnAuthority, markRemoteTaint } from './caller.mjs';
-import { antigravityDeclaration } from './declaration.mjs';
+import { callSidecarBridge, sanitizeSessionTitle } from './conversation-service.mjs';
+import {
+  CONVERSATION_TYPING_CAPABILITY,
+  PRESENCE_CAPABILITY,
+  SESSION_NAME_APPLY_CAPABILITY,
+  antigravityDeclaration,
+  capabilitiesEqual,
+  declarationFromRegistration,
+} from './declaration.mjs';
 import { OwnerLink, readSettings } from './owner.mjs';
 import { computeReplyTo, formatSpeaker, selectorForParty } from './presentation.mjs';
 import { MAX_SEND_BYTES, Services, closeSharedAgents, parseSubject, publicParty, versionedNodeCard } from './services.mjs';
-import { captureHostProvenance, fault, fingerprint } from './store.mjs';
+import { UUID_RE, captureHostProvenance, fault, fingerprint, isSameRunningProcess } from './store.mjs';
 
 const MAX_EARLY_FRAMES = 64;
 const MAX_BACKOFF_MS = 15_000;
@@ -13,6 +22,12 @@ const HEALTHY_STREAM_MS = 5_000;
 const MAX_RETAINED_PRESENTED = 200;
 const MAX_RETAINED_OUTBOX = 200;
 const MAX_RETAINED_REG_HISTORY = 20;
+const SIDECAR_RESTART_HYSTERESIS_MS = 5_000;
+const NAME_SYNC_INTERVAL_MS = 30_000;
+const NAME_RATE_LIMIT_HOLD_MS = 5 * 60_000;
+const TYPING_INTERVAL_MS = 4_000;
+const TYPING_MAX_DURATION_MS = 10 * 60_000;
+const STATUS_STREAM_OPEN_WAIT_MS = 2_500;
 
 const sleep = (ms, signal) => new Promise((resolve) => {
   if (signal?.aborted) return resolve();
@@ -355,6 +370,11 @@ export class SessionRuntime {
     hostProvenance = captureHostProvenance(),
     brainRoots,
     onListChanged = () => {},
+    callSidecar = callSidecarBridge,
+    nameSyncIntervalMs = NAME_SYNC_INTERVAL_MS,
+    typingIntervalMs = TYPING_INTERVAL_MS,
+    typingMaxDurationMs = TYPING_MAX_DURATION_MS,
+    statusStreamWaitMs = STATUS_STREAM_OPEN_WAIT_MS,
     now = Date.now,
   }) {
     this.config = config;
@@ -363,6 +383,11 @@ export class SessionRuntime {
     this.hostProvenance = hostProvenance;
     this.brainRoots = brainRoots;
     this.onListChanged = onListChanged;
+    this.callSidecar = callSidecar;
+    this.nameSyncIntervalMs = nameSyncIntervalMs;
+    this.typingIntervalMs = typingIntervalMs;
+    this.typingMaxDurationMs = typingMaxDurationMs;
+    this.statusStreamWaitMs = statusStreamWaitMs;
     this.now = now;
     this.makeServices = makeServices ?? ((credential, assertCurrent) => new Services({
       api: config.api,
@@ -376,9 +401,11 @@ export class SessionRuntime {
     });
 
     this.closed = false;
+    this.shutdownAbort = new AbortController();
     this.grantHeld = false;
     this.grantHeldCredentialHash = null;
     this.streamOpen = false;
+    this.streamOpenWaiters = new Set();
     this.streamAbort = null;
     this.streamTask = null;
     this.streamCredentialHash = null;
@@ -387,6 +414,12 @@ export class SessionRuntime {
 
     this.sessions = new Map();
     this.queues = new Map();
+    this.nameSyncQueues = new Map();
+    this.nameSyncTimer = null;
+    this.typingLoops = new Map();
+    this.typingWatcher = null;
+    this.lastKnownSidecar = null;
+    this.sidecarAbsentSinceMs = null;
     this.retryTimers = new Map();
     this.linkPollTimer = null;
     this.linkPollPromise = null;
@@ -409,6 +442,356 @@ export class SessionRuntime {
       }
     });
     return next;
+  }
+
+  enqueueNameSync(conversationId, fn) {
+    if (this.closed) return Promise.resolve();
+    const prev = this.nameSyncQueues.get(conversationId) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    const tail = next.then(() => {}, () => {});
+    this.nameSyncQueues.set(conversationId, tail);
+    void tail.finally(() => {
+      if (this.nameSyncQueues.get(conversationId) === tail) {
+        this.nameSyncQueues.delete(conversationId);
+      }
+    });
+    return next;
+  }
+
+  isCleanOwnerForNameSync(chat) {
+    if (chat?.taint?.tainted === true || chat?.taint?.activeWake === true) return false;
+    const inbox = Array.isArray(chat?.inbox) ? chat.inbox : [];
+    return !inbox.some((r) => r.phase === 'pending' || r.phase === 'in_flight' || r.phase === 'awaiting_full_read');
+  }
+
+  updateSessionNameIfCurrent(conversationId, reg, updater) {
+    const expectedEndpointId = reg?.response?.endpoint_id;
+    const expectedNodeId = reg?.nodeId;
+    if (!expectedEndpointId || !expectedNodeId) return false;
+    let updated = false;
+    this.store.updateChat(conversationId, (c) => {
+      if (
+        c.registration?.state !== 'active' ||
+        c.registration.response?.endpoint_id !== expectedEndpointId ||
+        c.registration.nodeId !== expectedNodeId
+      ) {
+        return c;
+      }
+      updater(c);
+      updated = true;
+      return c;
+    });
+    return updated;
+  }
+
+  ensureTypingWatcher(conversationId = null) {
+    if (this.closed || this.sessions.size === 0) return;
+    if (!this.typingWatcher) {
+      try {
+        const typingDir = this.store.ensureSubdir('typing');
+        const watcher = watch(typingDir, (_eventType, filename) => {
+          if (this.closed) return;
+          if (typeof filename !== 'string') {
+            for (const [convId] of this.sessions) this.syncTypingForConversation(convId);
+            return;
+          }
+          if (!filename.endsWith('.json')) return;
+          const convId = filename.slice(0, -5);
+          if (!UUID_RE.test(convId)) return;
+          const normalized = convId.toLowerCase();
+          if (this.sessions.has(normalized) || this.typingLoops.has(normalized)) {
+            this.syncTypingForConversation(normalized);
+          }
+        });
+        watcher.on('error', () => {
+          if (this.typingWatcher === watcher) {
+            try { watcher.close(); } catch {}
+            this.typingWatcher = null;
+          }
+        });
+        watcher.unref?.();
+        this.typingWatcher = watcher;
+      } catch {
+        // Fallback sync still runs on periodic poll and hook/tool boundaries.
+      }
+      for (const [convId] of this.sessions) {
+        this.syncTypingForConversation(convId);
+      }
+      return;
+    }
+    if (conversationId) {
+      this.syncTypingForConversation(conversationId);
+    }
+  }
+
+  stopTyping(conversationId, { clearMarker = false, token = null, conversationRef = null } = {}) {
+    const existing = this.typingLoops.get(conversationId);
+    if (existing) {
+      const tokenMatches = !token || existing.token === token;
+      const convMatches = !conversationRef || existing.conversationRef === conversationRef;
+      if (tokenMatches && convMatches) {
+        try { existing.abortController.abort(); } catch {}
+        this.typingLoops.delete(conversationId);
+      }
+    }
+    if (clearMarker) {
+      this.store.clearTypingMarker(conversationId, { token, conversationRef });
+    }
+  }
+
+  validateTypingMarker(conversationId, expectedToken = null, loopStartedAt = null) {
+    if (this.closed || this.grantHeld || !this.sessions.has(conversationId)) {
+      return { ok: false, staleToken: null };
+    }
+    const marker = this.store.readTypingMarker(conversationId);
+    if (!marker || typeof marker.conversationRef !== 'string' || !marker.conversationRef ||
+        typeof marker.endpointId !== 'string' || typeof marker.token !== 'string' ||
+        !Number.isFinite(marker.startedAt)) {
+      return { ok: false, staleToken: null };
+    }
+    if (expectedToken && marker.token !== expectedToken) {
+      return { ok: false, staleToken: null };
+    }
+    const reg = this.store.readChat(conversationId).registration;
+    const caps = Array.isArray(reg?.response?.runtime_capabilities) ? reg.response.runtime_capabilities : [];
+    const nowMs = this.now();
+    const effectiveStartedAt = loopStartedAt ?? Math.min(marker.startedAt, nowMs);
+    if (
+      reg?.state !== 'active' ||
+      reg.response?.endpoint_id !== marker.endpointId ||
+      !caps.includes(CONVERSATION_TYPING_CAPABILITY) ||
+      nowMs - effectiveStartedAt >= this.typingMaxDurationMs
+    ) {
+      return { ok: false, staleToken: marker.token };
+    }
+    return { ok: true, marker, reg, startedAt: effectiveStartedAt };
+  }
+
+  syncTypingForConversation(conversationId) {
+    const check = this.validateTypingMarker(conversationId);
+    if (!check.ok) {
+      this.stopTyping(conversationId);
+      if (check.staleToken) this.store.clearTypingMarker(conversationId, { token: check.staleToken });
+      return;
+    }
+
+    const { marker, startedAt } = check;
+    const existing = this.typingLoops.get(conversationId);
+    if (existing && existing.token === marker.token) return;
+    if (existing) this.stopTyping(conversationId);
+
+    const loop = {
+      conversationRef: marker.conversationRef,
+      token: marker.token,
+      startedAt,
+      abortController: new AbortController(),
+    };
+    this.typingLoops.set(conversationId, loop);
+
+    void (async () => {
+      const pulseSignal = AbortSignal.any([this.shutdownAbort.signal, loop.abortController.signal]);
+      let activeReg = check.reg;
+      while (!pulseSignal.aborted && this.typingLoops.get(conversationId) === loop) {
+        try {
+          await this.apiFor().submitTyping(activeReg, loop.conversationRef, { signal: pulseSignal });
+        } catch (error) {
+          if (this.typingLoops.get(conversationId) !== loop) return;
+          if (
+            [401, 403, 404, 409, 422].includes(error?.status) ||
+            ['credential_ended', 'credential_changed', 'runtime_closed', 'link_required', 'registration_unavailable'].includes(error?.code)
+          ) {
+            this.stopTyping(conversationId, { clearMarker: true, token: loop.token });
+            return;
+          }
+        }
+        await sleep(this.typingIntervalMs, pulseSignal);
+        if (pulseSignal.aborted || this.typingLoops.get(conversationId) !== loop) return;
+        const next = this.validateTypingMarker(conversationId, loop.token, loop.startedAt);
+        if (!next.ok) {
+          this.stopTyping(conversationId, { clearMarker: Boolean(next.staleToken), token: loop.token });
+          return;
+        }
+        activeReg = next.reg;
+      }
+      if (this.typingLoops.get(conversationId) === loop) this.stopTyping(conversationId, { token: loop.token });
+    })();
+  }
+
+  reRegisterIfOwned(conversationId) {
+    return this.enqueue(conversationId, async () => {
+      if (this.closed || this.grantHeld || !this.sessions.has(conversationId)) return;
+      await this.ensureSessionRegistered(conversationId, { inQueue: true });
+    }).catch(() => {});
+  }
+
+  async getHostConversationOrRetire(conversationId, endpointId, { signal = this.shutdownAbort.signal } = {}) {
+    try {
+      return await this.sidecarConversationCall('conversation.get', { conversationId }, { signal });
+    } catch (error) {
+      if (error?.code === 'not_found') {
+        void this.retireDeletedConversation(conversationId, endpointId).catch(() => {});
+      }
+      return null;
+    }
+  }
+
+  async retireDeletedConversation(conversationId, expectedEndpointId = null) {
+    if (this.closed || this.grantHeld || !this.sessions.has(conversationId)) return false;
+    return this.enqueue(conversationId, async () => {
+      if (this.closed || this.grantHeld) return false;
+      const entry = this.sessions.get(conversationId);
+      if (!entry) return false;
+      const chat = this.store.readChat(conversationId);
+      const reg = chat.registration;
+      if (reg?.state !== 'active' || !reg.response?.endpoint_id) return false;
+      if (expectedEndpointId && reg.response.endpoint_id !== expectedEndpointId) return false;
+
+      this.stopTyping(conversationId, { clearMarker: true });
+      const retryTimer = this.retryTimers.get(conversationId);
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        this.retryTimers.delete(conversationId);
+      }
+      this.store.clearWakeTrigger(conversationId);
+
+      try {
+        const api = this.apiFor();
+        await api.retireEndpoint(reg, { signal: this.shutdownAbort.signal });
+      } catch (error) {
+        if (error?.status !== 404 && error?.code !== 'registration_retired') {
+          return false; // Transient failure: leave in this.sessions so next 30s poll retries.
+        }
+      }
+
+      const retiredEndpointId = reg.response.endpoint_id;
+      this.store.updateChat(conversationId, (c) => {
+        if (c.registration?.response?.endpoint_id !== retiredEndpointId) return c;
+        if (c.registration.state !== 'fenced') {
+          c.registrationHistory ??= [];
+          c.registrationHistory.push({
+            ...c.registration,
+            terminalOutcome: { reason: 'host_conversation_deleted' },
+          });
+          c.registration = null;
+          delete c.sessionName;
+          compactChat(c);
+        }
+        return c;
+      });
+
+      entry.cachedSource = null;
+      this.sessions.delete(conversationId);
+      try { entry.lease.release(); } catch {}
+      return true;
+    });
+  }
+
+  resolveStreamOpenWaiters() {
+    if (this.streamOpenWaiters.size === 0) return;
+    const waiters = [...this.streamOpenWaiters];
+    this.streamOpenWaiters.clear();
+    for (const done of waiters) done();
+  }
+
+  async waitForStreamOpen({ timeoutMs = this.statusStreamWaitMs, signal } = {}) {
+    if (this.streamOpen || this.closed || this.grantHeld || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return this.streamOpen;
+    }
+    this.ensureStreamStarted();
+    if (this.streamOpen) return true;
+    await new Promise((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', done);
+        this.streamOpenWaiters.delete(done);
+        resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      timer.unref?.();
+      signal?.addEventListener('abort', done, { once: true });
+      this.streamOpenWaiters.add(done);
+      if (this.streamOpen || this.closed || this.grantHeld || signal?.aborted) done();
+    });
+    return this.streamOpen;
+  }
+
+  ensureNameSyncPoller() {
+    if (this.closed || this.nameSyncTimer || this.sessions.size === 0 || !Number.isFinite(this.nameSyncIntervalMs) || this.nameSyncIntervalMs <= 0) {
+      return;
+    }
+    this.nameSyncTimer = setTimeout(() => {
+      this.nameSyncTimer = null;
+      if (this.closed || this.sessions.size === 0) return;
+      void this.pollHostSessionNames().finally(() => {
+        if (!this.closed && this.sessions.size > 0) this.ensureNameSyncPoller();
+      });
+    }, this.nameSyncIntervalMs);
+    this.nameSyncTimer.unref?.();
+  }
+
+  async pollHostSessionNames() {
+    if (this.closed || this.grantHeld) return;
+    const declaration = this.activeDeclaration();
+    const sessionNameApply = declaration.runtime_capabilities.includes(SESSION_NAME_APPLY_CAPABILITY);
+    for (const [conversationId] of this.sessions) {
+      if (this.closed) return;
+      const chat = this.store.readChat(conversationId);
+      const reg = chat.registration;
+      if (reg?.state !== 'active' || !reg.response?.endpoint_id) continue;
+      const needsRotate =
+        reg.response.background_exchange_mode !== declaration.background_exchange_mode ||
+        reg.response.execution_surface !== declaration.execution_surface ||
+        !capabilitiesEqual(reg.response.runtime_capabilities, declaration.runtime_capabilities);
+      if (needsRotate) {
+        await this.reRegisterIfOwned(conversationId);
+        continue;
+      }
+      if (sessionNameApply) {
+        await this.enqueueNameSync(conversationId, () => this.syncHostSessionName(conversationId)).catch(() => {});
+      }
+      this.ensureTypingWatcher(conversationId);
+    }
+  }
+
+  async sidecarConversationCall(method, params, { signal = this.shutdownAbort.signal, timeoutMs = 1500 } = {}) {
+    const sidecar = this.store.readSidecarStatus(this.hostProvenance, this.now());
+    if (!sidecar.running || !sidecar.conversationService || !sidecar.socketPath || !sidecar.ipcToken) {
+      throw fault('sidecar_bridge_unavailable');
+    }
+    try {
+      return await this.callSidecar({
+        socketPath: sidecar.socketPath,
+        ipcToken: sidecar.ipcToken,
+        hostPid: this.hostProvenance.hostPid,
+        hostStartToken: this.hostProvenance.hostStartToken,
+        method,
+        params,
+        timeoutMs,
+        signal,
+      });
+    } catch (error) {
+      if (error?.code === 'sidecar_bridge_unavailable' || error?.code === 'unauthorized') {
+        // Re-read heartbeat once in case Sidecar restarted with a fresh token/socket.
+        const refreshed = this.store.readSidecarStatus(this.hostProvenance, this.now());
+        if (refreshed.running && refreshed.conversationService && refreshed.socketPath && refreshed.ipcToken &&
+            (refreshed.ipcToken !== sidecar.ipcToken || refreshed.socketPath !== sidecar.socketPath)) {
+          return this.callSidecar({
+            socketPath: refreshed.socketPath,
+            ipcToken: refreshed.ipcToken,
+            hostPid: this.hostProvenance.hostPid,
+            hostStartToken: this.hostProvenance.hostStartToken,
+            method,
+            params,
+            timeoutMs,
+            signal,
+          });
+        }
+      }
+      throw error;
+    }
   }
 
   credential() {
@@ -500,6 +883,7 @@ export class SessionRuntime {
               if (this.streamAbort?.signal === signal) {
                 this.streamOpen = true;
                 openedAt = this.now();
+                this.resolveStreamOpenWaiters();
                 void this.onStreamOpened();
               }
             },
@@ -511,6 +895,8 @@ export class SessionRuntime {
         if (error?.status === 401 || error?.status === 403 || error?.code === 'credential_ended') {
           this.grantHeld = true;
           this.grantHeldCredentialHash = credHash;
+          this.resolveStreamOpenWaiters();
+          for (const [convId] of this.typingLoops) this.stopTyping(convId);
           return;
         }
       } finally {
@@ -536,6 +922,7 @@ export class SessionRuntime {
       const chat = this.store.readChat(conversationId);
       if (chat.registration?.state === 'fenced') return;
       void this.enqueue(conversationId, async () => {
+        if (this.closed || this.grantHeld || !this.sessions.has(conversationId)) return;
         try {
           await this.ensureSessionRegistered(conversationId, { inQueue: true });
           await this.retryDeliveredReceipts(conversationId);
@@ -558,6 +945,7 @@ export class SessionRuntime {
       const chat = this.store.readChat(conversationId);
       if (chat.registration?.state === 'fenced') continue;
       void this.enqueue(conversationId, async () => {
+        if (this.closed || this.grantHeld || !this.sessions.has(conversationId)) return;
         try {
           await this.ensureSessionRegistered(conversationId, { inQueue: true });
           await this.retryDeliveredReceipts(conversationId);
@@ -629,18 +1017,54 @@ export class SessionRuntime {
   }
 
   activeDeclaration() {
-    const sidecar = this.store.readSidecarStatus(this.hostProvenance, this.now());
-    return antigravityDeclaration({ idleWakeup: sidecar.running });
+    const nowMs = this.now();
+    const sidecar = this.store.readSidecarStatus(this.hostProvenance, nowMs);
+    if (sidecar.running) {
+      this.sidecarAbsentSinceMs = null;
+      if (sidecar.conversationService === true) {
+        this.lastKnownSidecar = sidecar;
+        return antigravityDeclaration({ idleWakeup: true, sessionNameApply: true });
+      }
+      // Preserve sessionNameApply during a freshly restarted Sidecar's brief startup probe window.
+      const inStartupProbeWindow =
+        this.lastKnownSidecar?.conversationService === true &&
+        typeof sidecar.startedAt === 'number' &&
+        nowMs - sidecar.startedAt < SIDECAR_RESTART_HYSTERESIS_MS;
+      if (inStartupProbeWindow) {
+        return antigravityDeclaration({ idleWakeup: true, sessionNameApply: true });
+      }
+      this.lastKnownSidecar = sidecar;
+      return antigravityDeclaration({ idleWakeup: true, sessionNameApply: false });
+    }
+    // Brief restart hysteresis: hold previous declaration for up to 5s if the parent host is still alive
+    // so a transient 1-2s Sidecar restart does not thrash/rotate healthy endpoints.
+    if (
+      this.lastKnownSidecar?.running &&
+      isSameRunningProcess(this.hostProvenance.hostPid, this.hostProvenance.hostStartToken)
+    ) {
+      if (this.sidecarAbsentSinceMs === null) this.sidecarAbsentSinceMs = nowMs;
+      if (nowMs - this.sidecarAbsentSinceMs < SIDECAR_RESTART_HYSTERESIS_MS) {
+        return antigravityDeclaration({
+          idleWakeup: true,
+          sessionNameApply: this.lastKnownSidecar.conversationService === true,
+        });
+      }
+    }
+    this.lastKnownSidecar = null;
+    this.sidecarAbsentSinceMs = null;
+    return antigravityDeclaration({ idleWakeup: false, sessionNameApply: false });
   }
 
   async performRegister(conversationId, cred, entry, { allowRotateRetry = true } = {}) {
     entry.lease.assert();
     const api = this.apiFor(cred);
     const declaration = this.activeDeclaration();
+    const sessionNameApply = declaration.runtime_capabilities.includes(SESSION_NAME_APPLY_CAPABILITY);
     const chat = this.store.readChat(conversationId);
     let reg = chat.registration;
 
     if (reg?.nodeId && reg.nodeId !== cred.node) {
+      this.stopTyping(conversationId, { clearMarker: true });
       entry.cachedSource = null;
       this.store.updateChat(conversationId, (c) => {
         if (c.registration?.nodeId && c.registration.nodeId !== cred.node) {
@@ -652,6 +1076,8 @@ export class SessionRuntime {
           c.cursors = {};
           c.observedTargets = [];
           delete c.profileRevision;
+          delete c.sessionName;
+          delete c.activity;
         }
         return c;
       });
@@ -664,11 +1090,16 @@ export class SessionRuntime {
 
     if (reg?.response && reg.nodeId === cred.node && reg.state === 'active') {
       try {
-        await api.inspectEndpoint(reg, { declaration });
+        const inspected = await api.inspectEndpoint(reg, { declaration });
         this.store.updateChat(conversationId, (c) => {
           c.hostProvenance = this.hostProvenance;
           return c;
         });
+        this.ensureNameSyncPoller();
+        this.ensureTypingWatcher(conversationId);
+        if (sessionNameApply) {
+          void this.enqueueNameSync(conversationId, () => this.reconcileSessionNameFromServices(conversationId, reg, inspected)).catch(() => {});
+        }
         return reg;
       } catch (error) {
         if (error?.code === 'registration_superseded') {
@@ -708,12 +1139,20 @@ export class SessionRuntime {
       }
     }
 
+    // Establish hostProvenance on disk before probing Sidecar for birth title (required by Sidecar ownership fence).
+    this.store.updateChat(conversationId, (c) => {
+      c.hostProvenance = this.hostProvenance;
+      return c;
+    });
+
     let pendingReg;
     let pendingDeclaration = declaration;
     let replayedPending = false;
+    let birthTitle = null;
     if (reg?.state === 'pending' && reg.nodeId === cred.node && reg.request && reg.startedAt) {
       pendingReg = reg;
       replayedPending = true;
+      birthTitle = typeof reg.request.host_session_name === 'string' ? reg.request.host_session_name : null;
       pendingDeclaration = {
         runtime_kind: reg.request.runtime_kind ?? declaration.runtime_kind,
         execution_surface: reg.request.execution_surface ?? declaration.execution_surface,
@@ -723,6 +1162,18 @@ export class SessionRuntime {
           : declaration.runtime_capabilities,
       };
     } else {
+      const birthChat = this.store.readChat(conversationId);
+      if (sessionNameApply && this.isCleanOwnerForNameSync(birthChat) && !birthChat.sessionName?.servicesName) {
+        try {
+          const nativeConv = await this.sidecarConversationCall('conversation.get', { conversationId });
+          const postBirthChat = this.store.readChat(conversationId);
+          birthTitle = this.isCleanOwnerForNameSync(postBirthChat) && !postBirthChat.sessionName?.servicesName
+            ? (nativeConv?.title ?? null)
+            : null;
+        } catch {
+          birthTitle = null;
+        }
+      }
       await api.listEndpoints();
       const startedAt = api.serverTime ?? new Date(this.now()).toISOString();
       const nonce = randomUUID();
@@ -732,6 +1183,7 @@ export class SessionRuntime {
         runtime_session_id: conversationId,
         endpoint_nonce: nonce,
         display_label: 'Antigravity',
+        ...(birthTitle && { host_session_name: birthTitle }),
         share_with_peer: [],
         execution_surface: declaration.execution_surface,
         background_exchange_mode: declaration.background_exchange_mode,
@@ -799,9 +1251,18 @@ export class SessionRuntime {
 
     if (replayedPending && allowRotateRetry && (
       pendingDeclaration.background_exchange_mode !== declaration.background_exchange_mode ||
-      pendingDeclaration.execution_surface !== declaration.execution_surface
+      pendingDeclaration.execution_surface !== declaration.execution_surface ||
+      !capabilitiesEqual(pendingDeclaration.runtime_capabilities, declaration.runtime_capabilities)
     )) {
       return this.performRegister(conversationId, cred, entry, { allowRotateRetry: false });
+    }
+    this.ensureNameSyncPoller();
+    this.ensureTypingWatcher(conversationId);
+    if (sessionNameApply) {
+      void this.enqueueNameSync(conversationId, () => this.reconcileSessionNameFromServices(conversationId, activeReg, response, {
+        birthTitle,
+        droppedHostName: Array.isArray(response.dropped) && response.dropped.includes('host_session_name'),
+      })).catch(() => {});
     }
     return activeReg;
   }
@@ -822,7 +1283,10 @@ export class SessionRuntime {
       }
       return c;
     });
-    if (fenced && entry) entry.cachedSource = null;
+    if (fenced) {
+      this.stopTyping(conversationId, { clearMarker: true });
+      if (entry) entry.cachedSource = null;
+    }
   }
 
   findOwnedConversationForFrame(raw) {
@@ -848,11 +1312,15 @@ export class SessionRuntime {
   }
 
   async handleStreamFrame(frame) {
+    // Ephemeral typing frames are never acked, never buffered, and never injected into model text.
+    if (frame?.type === 'typing') {
+      return;
+    }
     const match = this.findOwnedConversationForFrame(frame);
     if (!match) {
-      // Buffer terminal control frames onto every concurrently registering session;
+      // Buffer terminal/name control frames onto every concurrently registering session;
       // never control-ack unowned endpoints or unsupported frames (e.g., session_resume).
-      if (frame?.type === 'force_unregister' || frame?.type === 'registration_retired') {
+      if (frame?.type === 'force_unregister' || frame?.type === 'registration_retired' || frame?.type === 'session_name_changed') {
         for (const [, entry] of this.sessions) {
           if (entry.registering && entry.earlyFrames.length < MAX_EARLY_FRAMES) {
             entry.earlyFrames.push(frame);
@@ -874,6 +1342,8 @@ export class SessionRuntime {
   }
 
   async dispatchStreamFrame(conversationId, entry, frame) {
+    // Guard against frames queued before retireDeletedConversation released the lease and removed the session.
+    if (this.closed || this.sessions.get(conversationId) !== entry) return;
     entry.lease.assert();
     if (frame.type === 'message') {
       await this.handleInboundMessage(conversationId, frame);
@@ -883,10 +1353,381 @@ export class SessionRuntime {
       await this.handleRegistrationRetired(conversationId, frame);
     } else if (frame.type === 'session_name_changed' && typeof frame.idempotency_key === 'string') {
       const chat = this.store.readChat(conversationId);
-      const owned = chat.registration?.response?.endpoint_id === frame.endpoint_id ||
-        (chat.registrationHistory ?? []).some((h) => h.response?.endpoint_id === frame.endpoint_id);
-      if (owned) {
-        try { await this.apiFor().controlAck(frame.idempotency_key); } catch {}
+      const reg = chat.registration;
+      if (reg?.state !== 'active' || reg.response?.endpoint_id !== frame.endpoint_id) return;
+      const effectiveCaps = Array.isArray(reg.response?.runtime_capabilities) ? reg.response.runtime_capabilities : [];
+      if (!effectiveCaps.includes(SESSION_NAME_APPLY_CAPABILITY)) return;
+      void this.enqueueNameSync(conversationId, () => this.handleSessionNameChanged(conversationId, frame)).catch(() => {});
+    }
+  }
+
+  async reconcileSessionNameFromServices(conversationId, reg, servicesRow, { birthTitle = null, droppedHostName = false } = {}) {
+    if (this.closed || this.grantHeld) return;
+    const desired = sanitizeSessionTitle(servicesRow?.session_naming?.name);
+    if (!desired) return;
+    const signal = this.shutdownAbort.signal;
+    const conv = await this.getHostConversationOrRetire(conversationId, reg.response?.endpoint_id, { signal });
+    if (!conv) return;
+    if (this.closed || conv?.archived === true) return;
+    const current = conv?.title ?? null;
+    const chat = this.store.readChat(conversationId);
+    if (
+      chat.registration?.state !== 'active' ||
+      chat.registration.response?.endpoint_id !== reg.response?.endpoint_id ||
+      chat.registration.nodeId !== reg.nodeId
+    ) {
+      return;
+    }
+    const prev = chat.sessionName ?? {};
+
+    // If Services already matches Antigravity's title, settle local state cleanly.
+    if (current === desired) {
+      this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+        c.sessionName = {
+          servicesName: desired,
+          hostTitle: desired,
+          pendingApplyName: null,
+          taintedObservedTitle: null,
+          ...(droppedHostName && birthTitle && birthTitle !== desired
+            ? { refusedName: birthTitle }
+            : (prev.refusedName ? { refusedName: prev.refusedName } : {})),
+        };
+      });
+      return;
+    }
+
+    const shouldApply =
+      current === null ||
+      droppedHostName ||
+      desired !== prev.servicesName ||
+      current === prev.pendingApplyName ||
+      (prev.refusedName && current === prev.refusedName);
+
+    if (!shouldApply) {
+      // Host title differs and Services did not change: let normal Host -> Services sync evaluate it.
+      await this.syncHostSessionName(conversationId);
+      return;
+    }
+
+    if (!this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+      c.sessionName = {
+        ...(c.sessionName ?? {}),
+        pendingApplyName: desired,
+        ...(droppedHostName && birthTitle && birthTitle !== desired && { refusedName: birthTitle }),
+      };
+    })) {
+      return;
+    }
+
+    const updated = await this.sidecarConversationCall('conversation.setTitle', { conversationId, title: desired }, { signal });
+    if (updated?.title !== desired) return;
+    this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+      c.sessionName = {
+        ...(c.sessionName ?? {}),
+        servicesName: desired,
+        hostTitle: desired,
+        pendingApplyName: null,
+        taintedObservedTitle: null,
+      };
+    });
+  }
+
+  async handleSessionNameChanged(conversationId, frame) {
+    if (this.closed || this.grantHeld) return;
+    const signal = this.shutdownAbort.signal;
+    const chat = this.store.readChat(conversationId);
+    const reg = chat.registration;
+    if (reg?.state !== 'active' || reg.response?.endpoint_id !== frame.endpoint_id) return;
+    const effectiveCaps = Array.isArray(reg.response?.runtime_capabilities) ? reg.response.runtime_capabilities : [];
+    if (!effectiveCaps.includes(SESSION_NAME_APPLY_CAPABILITY)) return;
+
+    const api = this.apiFor();
+    const declaration = declarationFromRegistration(reg);
+    let row;
+    try {
+      row = await api.inspectEndpoint(reg, { declaration, signal });
+    } catch {
+      return;
+    }
+    const desired = sanitizeSessionTitle(row?.session_naming?.name);
+    if (!desired) return;
+
+    const conv = await this.getHostConversationOrRetire(conversationId, reg.response?.endpoint_id, { signal });
+    if (!conv) return;
+    if (this.closed) return;
+    const current = conv?.title ?? null;
+    const latestChat = this.store.readChat(conversationId);
+    if (
+      latestChat.registration?.state !== 'active' ||
+      latestChat.registration.response?.endpoint_id !== frame.endpoint_id ||
+      latestChat.registration.nodeId !== reg.nodeId
+    ) {
+      return;
+    }
+    const sn = latestChat.sessionName ?? {};
+
+    // Idempotent settlement: title already matches Services' desired name (e.g. replay after crash before ack).
+    if (current === desired) {
+      const stillCurrent = this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+        c.sessionName = {
+          ...(c.sessionName ?? {}),
+          servicesName: desired,
+          hostTitle: desired,
+          pendingApplyName: null,
+          taintedObservedTitle: null,
+        };
+      });
+      if (stillCurrent) {
+        await api.controlAck(frame.idempotency_key, { status: 'applied', signal });
+      }
+      return;
+    }
+
+    // Check for concurrent clean local user rename (superseded race) only when baselined.
+    const hasBaseline = typeof sn.hostTitle === 'string' || typeof sn.servicesName === 'string';
+    const isLocalUserRename =
+      hasBaseline &&
+      current !== null &&
+      current !== sn.hostTitle &&
+      current !== sn.pendingApplyName &&
+      current !== sn.servicesName &&
+      current !== sn.refusedName &&
+      current !== sn.taintedObservedTitle &&
+      this.isCleanOwnerForNameSync(latestChat);
+
+    if (isLocalUserRename) {
+      if (sn.rateLimitHoldUntil && this.now() < sn.rateLimitHoldUntil && current === sn.rateLimitedName) {
+        return; // Respect active rate-limit cooldown; leave control frame unacked.
+      }
+      let ack;
+      try {
+        ack = await api.updateDisplayMetadata(reg, { hostSessionName: current }, { signal });
+      } catch {
+        return; // Leave control frame unacked on transient failure.
+      }
+      if (ack.accepted) {
+        const stillCurrent = this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+          c.sessionName = {
+            servicesName: current,
+            hostTitle: current,
+            pendingApplyName: null,
+            refusedName: null,
+            taintedObservedTitle: null,
+            rateLimitHoldUntil: null,
+            rateLimitedName: null,
+          };
+        });
+        if (stillCurrent) {
+          await api.controlAck(frame.idempotency_key, { status: 'applied', detail: 'superseded', signal });
+        }
+        return;
+      }
+      if (ack.reason === 'rate_limited') {
+        this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+          c.sessionName = {
+            ...(c.sessionName ?? {}),
+            rateLimitHoldUntil: this.now() + NAME_RATE_LIMIT_HOLD_MS,
+            rateLimitedName: current,
+          };
+        });
+        return; // Leave control frame unacked so retry converges once quota resets.
+      }
+      if (ack.reason === 'stale_incarnation') {
+        void this.reRegisterIfOwned(conversationId);
+        return;
+      }
+      if (ack.reason !== 'invalid') {
+        return; // Never overwrite user title on display_unassigned or unknown refusal reasons.
+      }
+      // reason === 'invalid': record refusedName and fall through to apply Services' canonical name.
+      if (!this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+        c.sessionName = { ...(c.sessionName ?? {}), refusedName: current };
+      })) {
+        return;
+      }
+    }
+
+    if (conv?.archived === true) return;
+
+    // Write-ahead pendingApplyName so a crash between setTitle and controlAck settles idempotently on replay.
+    if (!this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+      c.sessionName = { ...(c.sessionName ?? {}), pendingApplyName: desired };
+    })) {
+      return;
+    }
+
+    const updated = await this.sidecarConversationCall('conversation.setTitle', { conversationId, title: desired }, { signal });
+    if (updated?.title !== desired) return;
+
+    const settled = this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+      c.sessionName = {
+        ...(c.sessionName ?? {}),
+        servicesName: desired,
+        hostTitle: desired,
+        pendingApplyName: null,
+        taintedObservedTitle: null,
+      };
+    });
+    if (settled) {
+      await api.controlAck(frame.idempotency_key, { status: 'applied', signal });
+    }
+  }
+
+  async syncHostSessionName(conversationId) {
+    if (this.closed || this.grantHeld) return;
+    const signal = this.shutdownAbort.signal;
+    const chat = this.store.readChat(conversationId);
+    const reg = chat.registration;
+    if (reg?.state !== 'active' || !reg.response?.endpoint_id) return;
+    const effectiveCaps = Array.isArray(reg.response?.runtime_capabilities) ? reg.response.runtime_capabilities : [];
+    if (!effectiveCaps.includes(SESSION_NAME_APPLY_CAPABILITY)) return;
+
+    const recordTaintedDriftIfNeeded = (observedTitle, prevSn) => {
+      if (
+        observedTitle &&
+        observedTitle !== prevSn.hostTitle &&
+        observedTitle !== prevSn.servicesName &&
+        observedTitle !== prevSn.pendingApplyName &&
+        observedTitle !== prevSn.taintedObservedTitle
+      ) {
+        this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+          c.sessionName = { ...(c.sessionName ?? {}), taintedObservedTitle: observedTitle };
+        });
+      }
+    };
+
+    // Security P0 taint gate: never propagate host title changes while the conversation is remote-tainted
+    // or has pending/in-flight inbound work; also record observed drift so it cannot be laundered after taint lifts.
+    if (!this.isCleanOwnerForNameSync(chat)) {
+      const conv = await this.getHostConversationOrRetire(conversationId, reg.response?.endpoint_id, { signal });
+      if (!this.closed && conv?.title) {
+        recordTaintedDriftIfNeeded(conv.title, this.store.readChat(conversationId).sessionName ?? {});
+      }
+      return;
+    }
+
+    const initialSn = chat.sessionName ?? {};
+    const hasBaseline = typeof initialSn.hostTitle === 'string' || typeof initialSn.servicesName === 'string';
+    if (!hasBaseline) {
+      // Never push an unbaselined host title to Services; establish baseline from Services first.
+      try {
+        const api = this.apiFor();
+        const declaration = declarationFromRegistration(reg);
+        const row = await api.inspectEndpoint(reg, { declaration, signal });
+        await this.reconcileSessionNameFromServices(conversationId, reg, row);
+      } catch {}
+      return;
+    }
+
+    const conv = await this.getHostConversationOrRetire(conversationId, reg.response?.endpoint_id, { signal });
+    if (!conv) return;
+    if (this.closed || conv?.archived === true) return;
+    const current = conv?.title ?? null;
+
+    // Re-read post-await to close TOCTOU if inbound work arrived or endpoint rotated during conversation.get.
+    const freshChat = this.store.readChat(conversationId);
+    if (
+      freshChat.registration?.state !== 'active' ||
+      freshChat.registration.response?.endpoint_id !== reg.response.endpoint_id ||
+      freshChat.registration.nodeId !== reg.nodeId
+    ) {
+      return;
+    }
+    const sn = freshChat.sessionName ?? {};
+    if (!this.isCleanOwnerForNameSync(freshChat)) {
+      recordTaintedDriftIfNeeded(current, sn);
+      return;
+    }
+    if (
+      current === null ||
+      current === sn.hostTitle ||
+      current === sn.servicesName ||
+      current === sn.pendingApplyName ||
+      current === sn.refusedName ||
+      current === sn.taintedObservedTitle
+    ) {
+      return;
+    }
+    const nowMs = this.now();
+    if (sn.rateLimitHoldUntil && nowMs < sn.rateLimitHoldUntil && current === sn.rateLimitedName) {
+      return;
+    }
+
+    const api = this.apiFor();
+    let ack;
+    try {
+      ack = await api.updateDisplayMetadata(reg, { hostSessionName: current }, { signal });
+    } catch {
+      return;
+    }
+
+    if (ack.accepted) {
+      this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+        c.sessionName = {
+          servicesName: current,
+          hostTitle: current,
+          pendingApplyName: null,
+          refusedName: null,
+          taintedObservedTitle: null,
+          rateLimitHoldUntil: null,
+          rateLimitedName: null,
+        };
+      });
+      return;
+    }
+
+    if (ack.reason === 'rate_limited') {
+      // Never revert a valid user title on transient rate_limited; back off cleanly.
+      this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+        c.sessionName = {
+          ...(c.sessionName ?? {}),
+          rateLimitHoldUntil: this.now() + NAME_RATE_LIMIT_HOLD_MS,
+          rateLimitedName: current,
+        };
+      });
+      return;
+    }
+
+    if (ack.reason === 'stale_incarnation') {
+      void this.reRegisterIfOwned(conversationId);
+      return;
+    }
+
+    if (ack.reason === 'invalid') {
+      // Permanent grammar refusal: record refusedName and revert host title to Services' canonical name.
+      let canonical = sanitizeSessionTitle(sn.servicesName);
+      if (!canonical) {
+        try {
+          const declaration = declarationFromRegistration(reg);
+          const row = await api.inspectEndpoint(reg, { declaration, signal });
+          canonical = sanitizeSessionTitle(row?.session_naming?.name);
+        } catch {}
+      }
+      if (!this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+        c.sessionName = {
+          ...(c.sessionName ?? {}),
+          refusedName: current,
+          ...(canonical && { pendingApplyName: canonical }),
+        };
+      })) {
+        return;
+      }
+      if (canonical) {
+        try {
+          const reverted = await this.sidecarConversationCall('conversation.setTitle', { conversationId, title: canonical }, { signal });
+          if (reverted?.title === canonical) {
+            this.updateSessionNameIfCurrent(conversationId, reg, (c) => {
+              c.sessionName = {
+                ...(c.sessionName ?? {}),
+                servicesName: canonical,
+                hostTitle: canonical,
+                pendingApplyName: null,
+                refusedName: current,
+                taintedObservedTitle: null,
+              };
+            });
+          }
+        } catch {}
       }
     }
   }
@@ -1066,7 +1907,10 @@ export class SessionRuntime {
 
     const api = this.apiFor();
     const entry = this.sessions.get(conversationId);
-    if (retiredCurrent && entry) entry.cachedSource = null;
+    if (retiredCurrent) {
+      this.stopTyping(conversationId, { clearMarker: true });
+      if (entry) entry.cachedSource = null;
+    }
     try { await api.controlAck(frame.idempotency_key); } catch {}
 
     if (retiredCurrent && !this.closed && this.sessions.has(conversationId)) {
@@ -1384,6 +2228,13 @@ export class SessionRuntime {
       compactChat(c);
       return c;
     });
+
+    if (!outcome.request_refusal) {
+      const sentConvRef = outcome.subject?.conversation_ref ?? row.body?.requested_conversation_ref ?? null;
+      if (sentConvRef) {
+        this.stopTyping(conversationId, { clearMarker: true, conversationRef: sentConvRef });
+      }
+    }
 
     return {
       status: outcome.request_refusal ? 'send_refused' : 'sent',
@@ -2476,8 +3327,8 @@ export class SessionRuntime {
       held = readSettings(this.store);
     }
     const pendingCandidate = held.candidate && ['starting', 'pending', 'received'].includes(held.candidate.state);
-    const sidecar = this.store.readSidecarStatus(this.hostProvenance, this.now());
-    const declaration = antigravityDeclaration({ idleWakeup: sidecar.running });
+    const declaration = this.activeDeclaration();
+    const idleWakeupActive = declaration.background_exchange_mode === 'adapter_managed_turn';
 
     if (pendingCandidate || !held.credential) {
       const reason = pendingCandidate ? 'setup_pending' : 'not_linked';
@@ -2488,7 +3339,7 @@ export class SessionRuntime {
           stream: this.streamOpen ? 'connected' : 'disconnected',
           grant_held: this.grantHeld,
           idle_wakeup: {
-            state: sidecar.running ? 'active' : 'inactive',
+            state: idleWakeupActive ? 'active' : 'inactive',
             mode: declaration.background_exchange_mode,
           },
           plugin_version: this.config.version,
@@ -2512,7 +3363,8 @@ export class SessionRuntime {
       reg.state !== 'active' ||
       !this.sessions.has(conversationId) ||
       reg.response?.background_exchange_mode !== declaration.background_exchange_mode ||
-      reg.response?.execution_surface !== declaration.execution_surface;
+      reg.response?.execution_surface !== declaration.execution_surface ||
+      !capabilitiesEqual(reg.response?.runtime_capabilities, declaration.runtime_capabilities);
     if (needsEnsure && !this.grantHeld && reg?.state !== 'fenced') {
       try {
         reg = await this.ensureSessionRegistered(conversationId, { signal });
@@ -2520,6 +3372,12 @@ export class SessionRuntime {
         ensureError = error;
       }
       chat = this.store.readChat(conversationId);
+    } else if (
+      reg?.state === 'active' &&
+      this.sessions.has(conversationId) &&
+      declaration.runtime_capabilities.includes(SESSION_NAME_APPLY_CAPABILITY)
+    ) {
+      void this.enqueueNameSync(conversationId, () => this.syncHostSessionName(conversationId)).catch(() => {});
     }
 
     let identityPart;
@@ -2547,7 +3405,18 @@ export class SessionRuntime {
       clientPart = { status: 'unavailable', reason, ...(ensureError?.reason && { detail: ensureError.reason }) };
     } else if (isOwned && reg?.response?.endpoint_id) {
       try {
-        const row = await api.inspectEndpoint(reg, { declaration, signal });
+        const inspectDeclaration = declarationFromRegistration(reg);
+        const expectsPresence = inspectDeclaration.runtime_capabilities.includes(PRESENCE_CAPABILITY);
+        if (expectsPresence && !this.streamOpen && !this.grantHeld) {
+          await this.waitForStreamOpen({ signal });
+        }
+        let row = await api.inspectEndpoint(reg, { declaration: inspectDeclaration, signal });
+        if (expectsPresence && row.presence === 'offline' && this.streamOpen && !signal?.aborted) {
+          await sleep(150, signal);
+          if (!signal?.aborted) {
+            row = await api.inspectEndpoint(reg, { declaration: inspectDeclaration, signal });
+          }
+        }
         if (identityPart && !identityPart.status && row.session_naming?.name) {
           identityPart.session_name = row.session_naming.name;
         }
@@ -2588,7 +3457,7 @@ export class SessionRuntime {
       stream: this.streamOpen ? 'connected' : 'disconnected',
       grant_held: this.grantHeld,
       idle_wakeup: {
-        state: sidecar.running ? 'active' : 'inactive',
+        state: idleWakeupActive ? 'active' : 'inactive',
         mode: declaration.background_exchange_mode,
       },
       plugin_version: this.config.version,
@@ -2607,7 +3476,20 @@ export class SessionRuntime {
   async shutdown() {
     if (this.closed) return;
     this.closed = true;
+    this.shutdownAbort.abort();
+    this.resolveStreamOpenWaiters();
     this.stopLinkPoller();
+    if (this.typingWatcher) {
+      try { this.typingWatcher.close(); } catch {}
+      this.typingWatcher = null;
+    }
+    for (const [convId] of this.typingLoops) {
+      this.stopTyping(convId);
+    }
+    if (this.nameSyncTimer) {
+      clearTimeout(this.nameSyncTimer);
+      this.nameSyncTimer = null;
+    }
     if (this.sleepCheckTimer) {
       clearInterval(this.sleepCheckTimer);
       this.sleepCheckTimer = null;
@@ -2620,8 +3502,9 @@ export class SessionRuntime {
 
     const inflightRegs = [...this.sessions.values()].map((e) => e.registering?.catch(() => {})).filter(Boolean);
     const inflightQueues = [...this.queues.values()];
+    const inflightNameSync = [...this.nameSyncQueues.values()];
     const inflightLink = this.linkPollPromise ? [this.linkPollPromise.catch(() => {})] : [];
-    await Promise.allSettled([...inflightRegs, ...inflightQueues, ...inflightLink]);
+    await Promise.allSettled([...inflightRegs, ...inflightQueues, ...inflightNameSync, ...inflightLink]);
 
     const cred = this.credential();
     const api = cred?.token && cred?.node
@@ -2648,6 +3531,7 @@ export class SessionRuntime {
     }));
     this.sessions.clear();
     this.queues.clear();
+    this.nameSyncQueues.clear();
     closeSharedAgents();
   }
 }
